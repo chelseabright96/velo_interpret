@@ -995,6 +995,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 scale = generative_outputs["scale"]
                 px_rho = generative_outputs["px_rho"]
                 px_tau = generative_outputs["px_tau"]
+                dec_mean = generative_outputs["gene_recon"]
+                dec_lat = generative_outputs["dec_latent"]
 
                 (mixture_dist_s, mixture_dist_u, _,) = self.module.get_px(
                     px_pi,
@@ -1019,7 +1021,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 rls[-1] = np.mean(rls[-1], axis=0)
 
         rls = np.concatenate(rls, axis=0)
-        return rls
+        return rls.shape, dec_mean.shape, dec_lat.shape
 
     @torch.no_grad()
     def get_rates(self, mean: bool = True):
