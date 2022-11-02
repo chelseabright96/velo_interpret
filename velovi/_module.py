@@ -13,10 +13,18 @@ from torch.distributions import Categorical, Dirichlet, MixtureSameFamily, Norma
 from torch.distributions import kl_divergence as kl
 from scvi.distributions import NegativeBinomial
 
-from ._constants import REGISTRY_KEYS
+import logging
+import warnings
+from functools import partial
+from typing import Iterable, List, Optional, Sequence, Tuple, Union
+
+from velovi import REGISTRY_KEYS
 from ._utils import one_hot_encoder
 
+logger = logging.getLogger(__name__)
+
 torch.backends.cudnn.benchmark = True
+
 
 class MaskedLinear(nn.Linear):
     def __init__(self, n_in,  n_out, mask, bias=True):
@@ -351,6 +359,16 @@ class DecoderVELOVI(nn.Module):
 
         return px_pi, px_rho, px_tau, recon_x, dec_latent
 
+    def nonzero_terms(self):
+        v = self.L0.expr_L.weight.data
+        nz = (v.norm(p=1, dim=0)>0).cpu().numpy()
+        nz = np.append(nz, np.full(self.n_ext_m, True))
+        nz = np.append(nz, np.full(self.n_ext, True))
+        return nz
+
+    def n_inactive_terms(self):
+        n = (~self.nonzero_terms()).sum()
+        return int(n)
 
 # VAE model
 class VELOVAE(BaseModuleClass):
@@ -561,7 +579,10 @@ class VELOVAE(BaseModuleClass):
             self.use_dr = False
 
         if recon_loss == "nb":
-            self.theta = torch.nn.Parameter(torch.randn(self.n_input, self.n_conditions))
+            if self.n_conditions != 0:
+                self.theta = torch.nn.Parameter(torch.randn(self.n_input, self.n_conditions))
+            else:
+                self.theta = torch.nn.Parameter(torch.randn(1, self.n_input))
         else:
             self.theta = None
 
@@ -751,16 +772,18 @@ class VELOVAE(BaseModuleClass):
 
         #gene reconstruction loss
         ground_truth_counts = spliced + unspliced
+        
 
         if cond_batch is not None:
             dispersion = F.linear(one_hot_encoder(cond_batch, self.n_conditions), self.theta) #batch is the
         else:
-            dispersion = self.theta 
-              
+            dispersion = self.theta   
         dispersion = torch.exp(dispersion)
+
         dec_mean = generative_outputs["gene_recon"]
-        negbin = -NegativeBinomial(mu=dec_mean, theta=dispersion)
-        gene_recon_loss = negbin(ground_truth_counts).sum(dim=-1)
+        negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
+        
+        gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]
@@ -788,6 +811,7 @@ class VELOVAE(BaseModuleClass):
         weighted_kl_local = kl_weight * (kl_divergence_z) + kl_pi
 
         local_loss = torch.mean(reconst_loss + gene_recon_loss + weighted_kl_local)
+        print(f"local_loss: {local_loss}")
 
         # combine local and global
         global_loss = 0
@@ -796,7 +820,7 @@ class VELOVAE(BaseModuleClass):
             + self.penalty_scale * (1 - kl_weight) * end_penalty
             + (1 / n_obs) * kl_weight * (global_loss)
         )
-
+        print(f"loss: {loss}")
         loss_recorder = LossRecorder(
             loss, reconst_loss, kl_local, torch.tensor(global_loss)
         )

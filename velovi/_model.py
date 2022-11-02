@@ -67,10 +67,24 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         dropout_rate: float = 0.1,
         gamma_init_data: bool = False,
         linear_decoder: bool = False,
+        mask: Optional[Union[np.ndarray, list]] = None,
+        mask_key: str = 'I',
+        soft_mask: bool = False,
         **model_kwargs,
     ):
         super().__init__(adata)
         self.n_latent = n_latent
+
+        if mask is None and mask_key not in self.adata.varm:
+            raise ValueError('Please provide mask.')
+        
+        if mask is None:
+            mask = adata.varm[mask_key].T
+
+        self.mask_ = mask if isinstance(mask, list) else mask.tolist()
+        mask = torch.tensor(mask).float()
+
+        self.soft_mask_ = soft_mask
 
         spliced = self.adata_manager.get_from_registry(REGISTRY_KEYS.X_KEY)
         unspliced = self.adata_manager.get_from_registry(REGISTRY_KEYS.U_KEY)
@@ -112,6 +126,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             switch_spliced=ms_upper,
             switch_unspliced=us_upper,
             linear_decoder=linear_decoder,
+            mask=mask,
+            soft_mask=self.soft_mask_,
             **model_kwargs,
         )
         self._model_summary_string = (
@@ -128,14 +144,18 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
     def train(
         self,
         max_epochs: Optional[int] = 500,
-        lr: float = 1e-2,
+        lr: float = 1e-3,
         weight_decay: float = 1e-2,
         use_gpu: Optional[Union[str, int, bool]] = None,
         train_size: float = 0.9,
         validation_size: Optional[float] = None,
         batch_size: int = 256,
-        early_stopping: bool = True,
+        early_stopping: bool = False,
+        early_stopping_monitor: Literal[
+            "elbo_validation", "reconstruction_loss_validation", "kl_local_validation"
+        ] = "elbo_validation",
         gradient_clip_val: float = 10,
+        alpha_GP=0.7,
         plan_kwargs: Optional[dict] = None,
         **trainer_kwargs,
     ):
@@ -175,9 +195,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         user_plan_kwargs = (
             plan_kwargs.copy() if isinstance(plan_kwargs, dict) else dict()
         )
-        plan_kwargs = dict(lr=lr, weight_decay=weight_decay, optimizer="AdamW")
+        plan_kwargs = dict(weight_decay=weight_decay, optimizer="AdamW")
         plan_kwargs.update(user_plan_kwargs)
 
+        
         user_train_kwargs = trainer_kwargs.copy()
         trainer_kwargs = dict(gradient_clip_val=gradient_clip_val)
         trainer_kwargs.update(user_train_kwargs)
@@ -189,12 +210,18 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             batch_size=batch_size,
             use_gpu=use_gpu,
         )
-        training_plan = TrainingPlan(self.module, **plan_kwargs)
+        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, lr=lr, **plan_kwargs)
 
         es = "early_stopping"
         trainer_kwargs[es] = (
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
         )
+
+        trainer_kwargs["callbacks"] = (
+            [] if "callbacks" not in trainer_kwargs.keys() else trainer_kwargs["callbacks"]
+        )
+        trainer_kwargs["callbacks"] += [MyEarlyStopping(monitor=early_stopping_monitor)]
+
         runner = TrainRunner(
             self,
             training_plan=training_plan,
@@ -204,6 +231,33 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             **trainer_kwargs,
         )
         return runner()
+
+    
+
+    def get_loss(self, adata):
+        # run the model forward on the data
+
+        adata = self._validate_anndata(adata)
+        scdl = self._make_data_loader(
+            adata=adata, indices=None, batch_size=256
+        )
+
+        for tensors in scdl:    
+            inference_outputs, generative_outputs, loss = self.module.forward(
+                tensors=tensors,
+                compute_loss=True,
+                )
+        
+        return inference_outputs, generative_outputs, loss
+        # # calculate the mse loss
+        
+        # # initialize gradients to zero
+        # optim.zero_grad()
+        # # backpropagate
+        # loss.backward()
+        # # take a gradient step
+        # optim.step()
+        # return loss
 
     @torch.no_grad()
     def get_state_assignment(
@@ -275,7 +329,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             for _ in range(n_samples):
                 _, generative_outputs = self.module.forward(
                     tensors=tensors,
-                    compute_loss=False,
+                    compute_loss=True,
                 )
                 output = generative_outputs["px_pi"]
                 output = output[..., gene_mask, :]
