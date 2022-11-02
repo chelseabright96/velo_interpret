@@ -21,6 +21,8 @@ from scvi.model.base._utils import _de_core
 from scvi.train import TrainingPlan, TrainRunner
 from scvi.utils._docstrings import doc_differential_expression, setup_anndata_dsp
 from sklearn.metrics.pairwise import cosine_similarity
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from ._trainer import CustomTrainingPlan
 
 from ._constants import REGISTRY_KEYS
 from ._module import VELOVAE
@@ -32,6 +34,23 @@ def _softplus_inverse(x: np.ndarray) -> np.ndarray:
     x = torch.from_numpy(x)
     x_inv = torch.where(x > 20, x, x.expm1().log()).numpy()
     return x_inv
+
+
+class MyEarlyStopping(EarlyStopping):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs )
+        self.early_stopping_reason = None
+
+    def _evaluate_stopping_criteria(self):
+        should_stop, reason  = super()._evaluate_stopping_criteria()
+
+        if not should_stop:
+            new_lr = self.lr
+            if self.watch_lr is not None and self.watch_lr != new_lr:
+                self.watch_lr = new_lr
+                self.update_prox_ops()
+
+        return should_stop, reason
 
 
 class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
