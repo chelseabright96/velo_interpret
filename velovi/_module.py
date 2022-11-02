@@ -108,66 +108,6 @@ class MaskedCondLayers(nn.Module):
         return out
 
 
-# class MaskedLinearDecoder(nn.Module):
-#     def __init__(self, in_dim, out_dim, n_cond, mask, ext_mask, recon_loss,
-#                  last_layer=None, n_ext=0, n_ext_m=0):
-#         super().__init__()
-
-#         if recon_loss == "mse":
-#             if last_layer == "softmax":
-#                 raise ValueError("Can't specify softmax last layer with mse loss.")
-#             last_layer = "identity" if last_layer is None else last_layer
-#         elif recon_loss == "nb":
-#             last_layer = "softmax" if last_layer is None else last_layer
-#         else:
-#             raise ValueError("Unrecognized loss.")
-
-#         print("GP Decoder Architecture:")
-#         print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
-#         if mask is not None:
-#             print('\twith hard mask.')
-#         else:
-#             print('\twith soft mask.')
-
-#         self.n_ext = n_ext
-#         self.n_ext_m = n_ext_m
-
-#         self.n_cond = 0
-#         if n_cond is not None:
-#             self.n_cond = n_cond
-
-#         self.L0 = MaskedCondLayers(in_dim, out_dim, n_cond, bias=False, n_ext=n_ext, n_ext_m=n_ext_m,
-#                                    mask=mask, ext_mask=ext_mask)
-
-#         if last_layer == "softmax":
-#             self.mean_decoder = nn.Softmax(dim=-1)
-#         elif last_layer == "softplus":
-#             self.mean_decoder = nn.Softplus()
-#         elif last_layer == "exp":
-#             self.mean_decoder = torch.exp
-#         elif last_layer == "relu":
-#             self.mean_decoder = nn.ReLU()
-#         elif last_layer == "identity":
-#             self.mean_decoder = lambda a: a
-#         else:
-#             raise ValueError("Unrecognized last layer.")
-
-#         print("Last Decoder layer:", last_layer)
-
-#     def forward(self, z, batch=None):
-#         # if batch is not None:
-#         #     batch = one_hot_encoder(batch, n_cls=self.n_cond)
-#         #     z_cat = torch.cat((z, batch), dim=-1)
-#         #     dec_latent = self.L0(z_cat)
-#         # else:
-#         #     dec_latent = self.L0(z)
-
-#         dec_latent = self.L0(z)
-#         recon_x = self.mean_decoder(dec_latent)
-
-
-#         return recon_x, dec_latent
-
 class DecoderVELOVI(nn.Module):
     """
     Decodes data from latent space of ``n_input`` dimensions ``n_output``dimensions.
@@ -238,10 +178,10 @@ class DecoderVELOVI(nn.Module):
 
         #print("GP Decoder Architecture:")
         #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
-        if mask is not None:
-            print('\twith hard mask.')
-        else:
-            print('\twith soft mask.')
+        # if mask is not None:
+        #     print('\twith hard mask.')
+        # else:
+        #     print('\twith soft mask.')
 
         self.n_ext = n_ext
         self.n_ext_m = n_ext_m
