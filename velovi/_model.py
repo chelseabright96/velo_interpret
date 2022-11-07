@@ -40,8 +40,10 @@ class MyEarlyStopping(EarlyStopping):
     def __init__(self, **kwargs):
         super().__init__(**kwargs )
         self.early_stopping_reason = None
+        
 
     def _evaluate_stopping_criteria(self):
+        logger.info("Evaluating stopping criteria")
         should_stop, reason  = super()._evaluate_stopping_criteria()
 
         if not should_stop:
@@ -49,6 +51,7 @@ class MyEarlyStopping(EarlyStopping):
             if self.watch_lr is not None and self.watch_lr != new_lr:
                 self.watch_lr = new_lr
                 self.update_prox_ops()
+                logger.info(f"updating prox_ops from early stopping criteria")
 
         return should_stop, reason
 
@@ -92,7 +95,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         **model_kwargs,
     ):
         super().__init__(adata)
-        self.n_latent = n_latent
 
         if mask is None and mask_key not in self.adata.varm:
             raise ValueError('Please provide mask.')
@@ -102,6 +104,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         self.mask_ = mask if isinstance(mask, list) else mask.tolist()
         mask = torch.tensor(mask).float()
+        self.n_latent = len(self.mask_)
+
 
         self.soft_mask_ = soft_mask
 
@@ -135,7 +139,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         self.module = VELOVAE(
             n_input=self.summary_stats["n_vars"],
             n_hidden=n_hidden,
-            n_latent=n_latent,
+            n_latent=self.n_latent,
             n_layers=n_layers,
             dropout_rate=dropout_rate,
             gamma_unconstr_init=gamma_unconstr,
@@ -160,16 +164,18 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
         self.init_params_ = self._get_init_params(locals())
 
+
+
     def train(
         self,
         max_epochs: Optional[int] = 500,
-        lr: float = 1e-3,
+        lr: float = 1e-2,
         weight_decay: float = 1e-2,
         use_gpu: Optional[Union[str, int, bool]] = None,
         train_size: float = 0.9,
-        validation_size: Optional[float] = None,
+        validation_size: Optional[float] = 0.1,
         batch_size: int = 256,
-        early_stopping: bool = False,
+        early_stopping: bool = True,
         early_stopping_monitor: Literal[
             "elbo_validation", "reconstruction_loss_validation", "kl_local_validation"
         ] = "elbo_validation",
@@ -229,7 +235,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             batch_size=batch_size,
             use_gpu=use_gpu,
         )
-        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, lr=lr, **plan_kwargs)
+
+
+        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, **plan_kwargs)
+        #training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
         trainer_kwargs[es] = (
@@ -239,7 +248,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         trainer_kwargs["callbacks"] = (
             [] if "callbacks" not in trainer_kwargs.keys() else trainer_kwargs["callbacks"]
         )
-        trainer_kwargs["callbacks"] += [MyEarlyStopping(monitor=early_stopping_monitor)]
+        #trainer_kwargs["callbacks"] += [MyEarlyStopping(monitor=early_stopping_monitor)]
 
         runner = TrainRunner(
             self,
@@ -249,6 +258,9 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             use_gpu=use_gpu,
             **trainer_kwargs,
         )
+
+        # print(next(iter(data_splitter.train_dataloader())))
+        # print(next(iter(data_splitter.val_dataloader())))
         return runner()
 
     
@@ -268,15 +280,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 )
         
         return inference_outputs, generative_outputs, loss
-        # # calculate the mse loss
-        
-        # # initialize gradients to zero
-        # optim.zero_grad()
-        # # backpropagate
-        # loss.backward()
-        # # take a gradient step
-        # optim.step()
-        # return loss
+
 
     @torch.no_grad()
     def get_state_assignment(
@@ -378,6 +382,152 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             states = hard_assign
 
         return states, state_cats
+    
+    def nonzero_terms(self):
+        """Return indices of active terms.
+           Active terms are the terms which were not deactivated by the group lasso regularization.
+        """
+        return self.module.decoder.nonzero_terms()
+
+    @torch.no_grad()
+    def get_latent(
+    self,
+    adata: Optional[AnnData] = None,
+    indices: Optional[Sequence[int]] = None,
+    gene_list: Optional[Sequence[str]] = None,
+    n_samples: int = 1,
+    n_samples_overall: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    return_mean: bool = True,
+    return_numpy: Optional[bool] = None,
+    only_active: bool = False,
+    mean: bool = False,
+    mean_var: bool = False):
+
+        """Map `x` in to the latent space. This function will feed data in encoder
+            and return z for each sample in data.
+            Parameters
+            ----------
+            x
+                Numpy nd-array to be mapped to latent space. `x` has to be in shape [n_obs, input_dim].
+                If None, then `self.adata.X` is used.
+            c
+                `numpy nd-array` of original (unencoded) desired labels for each sample.
+            only_active
+                Return only the latent variables which correspond to active terms, i.e terms that
+                were not deactivated by the group lasso regularization.
+            mean
+                return mean instead of random sample from the latent space
+            mean_var
+                return mean and variance instead of random sample from the latent space
+                if `mean=False`.
+            Returns
+            -------
+                Returns array containing latent space encoding of 'x'.
+        """
+        adata = self._validate_anndata(adata)
+        if indices is None:
+            indices = np.arange(adata.n_obs)
+        if n_samples_overall is not None:
+            indices = np.random.choice(indices, n_samples_overall)
+        scdl = self._make_data_loader(
+            adata=adata, indices=indices, batch_size=batch_size
+        )
+
+
+        if n_samples > 1 and return_mean is False:
+            if return_numpy is False:
+                warnings.warn(
+                    "return_numpy must be True if n_samples > 1 and return_mean is False, returning np.ndarray"
+                )
+            return_numpy = True
+        if indices is None:
+            indices = np.arange(adata.n_obs)
+
+        latent = []
+        for tensors in scdl:
+            inference_outputs= self.module.inference(
+                spliced=tensors["X"],
+                unspliced=tensors["U"],
+                n_samples=n_samples,
+            )
+            #n_samples x cells x GPs
+            z = inference_outputs["z"]
+            z = z.cpu().numpy()
+            latent.append(z)
+            if return_mean and n_samples > 1:
+                latent[-1] = np.mean(latent[-1], axis=0)
+        latent = np.concatenate(latent, axis=0)
+        if not only_active:
+            return latent
+        else:
+            active_idx = self.nonzero_terms()
+            latent = latent[:, active_idx]
+            return latent
+
+
+        # if return_numpy is None or return_numpy is False:
+        #     return pd.DataFrame(
+        #         latent,
+        #         columns=adata.var_names,
+        #         index=adata.obs_names[indices],
+        #     )
+        # else:
+        #     return latent
+
+    def latent_directions(self, method="sum", get_confidence=False,
+                          adata=None, key_added='directions'):
+        """Get directions of upregulation for each latent dimension.
+           Multipling this by raw latent scores ensures positive latent scores correspond to upregulation.
+           Parameters
+           ----------
+           method: String
+                Method of calculation, it should be 'sum' or 'counts'.
+           get_confidence: Boolean
+                Only for method='counts'. If 'True', also calculate confidence
+                of the directions.
+           adata: AnnData
+                An AnnData object to store dimensions. If 'None', self.adata is used.
+           key_added: String
+                key of adata.uns where to put the dimensions.
+        """
+        if adata is None:
+            adata = self.adata
+
+        terms_weights = self.module.decoder.L0.expr_L.weight.data
+        # if self.n_ext_m_ > 0:
+        #     terms_weights = torch.cat([terms_weights, self.module.decoder.L0.ext_L_m.weight.data], dim=1)
+        # if self.n_ext_ > 0:
+        #     terms_weights = torch.cat([terms_weights, self.module.decoder.L0.ext_L.weight.data], dim=1)
+
+        if method == "sum":
+            signs = terms_weights.sum(0).cpu().numpy()
+            signs[signs>0] = 1.
+            signs[signs<0] = -1.
+            confidence = None
+        elif method == "counts":
+            num_nz = torch.count_nonzero(terms_weights, dim=0)
+            upreg_genes = torch.count_nonzero(terms_weights > 0, dim=0)
+            signs = upreg_genes / (num_nz+(num_nz==0))
+            signs = signs.cpu().numpy()
+
+            confidence = signs.copy()
+            confidence = np.abs(confidence-0.5)/0.5
+            confidence[num_nz==0] = 0
+
+            signs[signs>0.5] = 1.
+            signs[signs<0.5] = -1.
+
+            signs[signs==0.5] = 0
+            signs[num_nz==0] = 0
+        else:
+            raise ValueError("Unrecognized method for getting the latent direction.")
+
+        adata.uns[key_added] = signs
+        if get_confidence and confidence is not None:
+            adata.uns[key_added + '_confindence'] = confidence
+
+        
 
     @torch.no_grad()
     def get_latent_time(

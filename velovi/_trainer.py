@@ -1,5 +1,10 @@
-from scvi import train
-
+from scvi.train import TrainingPlan
+import torch
+import pytorch_lightning as pl
+from scvi._compat import Literal
+from typing import Union
+import logging
+logger = logging.getLogger(__name__)
 class ProxGroupLasso:
     def __init__(self, alpha_GP, omega=None, inplace=True):
     # omega - vector of coefficients with size
@@ -26,7 +31,7 @@ class ProxGroupLasso:
 
         W-=W/scaled_norm_vector
         W*=norm_g_gr_vect.float()
-
+        #print(f"W:{W}")
 
         return W
 
@@ -55,22 +60,44 @@ class ProxL1:
         W -= W_cond_joint.float()*W
         return W
 
-class CustomTrainingPlan(train.TrainingPlan):
+class CustomTrainingPlan(TrainingPlan):
     def __init__(self, 
             model,
             alpha_GP,
-            lr,
+            lr=1e-2,
+            weight_decay=1e-6,
+            n_steps_kl_warmup: Union[int, None] = None,
+            n_epochs_kl_warmup: Union[int, None] = 400,
+            reduce_lr_on_plateau: bool = False,
+            lr_factor: float = 0.6,
+            lr_patience: int = 30,
+            lr_threshold: float = 0.0,
+            lr_scheduler_metric: Literal[
+                "elbo_validation", "reconstruction_loss_validation", "kl_local_validation"
+            ] = "elbo_validation",
+            lr_min: float = 0,
             omega=None,
             alpha_l1=None,
-            alpha_l1_epoch_anneal=None,
+            alpha_l1_epoch_anneal=100,
             alpha_l1_anneal_each=5,
             gamma_ext=None,
             gamma_epoch_anneal=None,
             gamma_anneal_each=5,
             beta=1.,
             print_stats=True,
-            **kwargs):
-        super().__init__(model, **kwargs)
+            **loss_kwargs,):
+        super().__init__(module=model,
+            lr=lr,
+            weight_decay=weight_decay,
+            n_steps_kl_warmup=n_steps_kl_warmup,
+            n_epochs_kl_warmup=n_epochs_kl_warmup,
+            reduce_lr_on_plateau=reduce_lr_on_plateau,
+            lr_factor=lr_factor,
+            lr_patience=lr_patience,
+            lr_threshold=lr_threshold,
+            lr_scheduler_metric=lr_scheduler_metric,
+            lr_min=lr_min,
+            **loss_kwargs)
 
         self.model=model
         self.lr = lr
@@ -211,26 +238,97 @@ class CustomTrainingPlan(train.TrainingPlan):
 
     def training_step(self, batch, batch_idx, optimizer_idx=0):
         self.init_prox_ops()
-        super().training_step(batch, batch_idx, optimizer_idx=0)
+        """Training step for the model."""
+        if "kl_weight" in self.loss_kwargs:
+            kl_weight = self.kl_weight
+            self.loss_kwargs.update({"kl_weight": kl_weight})
+            self.log("kl_weight", kl_weight, on_step=True, on_epoch=False)
+        _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
+        #self.log("train_loss", scvi_loss.loss, on_epoch=True)
+        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
+        #self.compute_and_log_metrics(scvi_loss, self.train_metrics, "train")
+        #super().training_step(batch, batch_idx, optimizer_idx=0)
         self.apply_prox_ops()
+        return scvi_loss.loss
         
-
     def validation_step(self, batch, batch_idx):
-        super().validation_step(batch, batch_idx)
-        if self.print_stats:
-            if self.use_prox_ops['main_group_lasso']:
-                n_deact_terms = self.model.decoder.n_inactive_terms()
-                msg = f'Number of deactivated terms: {n_deact_terms}'
-                msg = '\n' + msg
-                print(msg)
-                print('-------------------')
-            if self.use_prox_ops['main_soft_mask']:
-                main_mask = self.prox_ops['main_soft_mask']._I
-                share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-                share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-                print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-                print('-------------------')
+        """Validation step for the model."""
+        # loss kwargs here contains `n_obs` equal to n_training_obs
+        # so when relevant, the actual loss value is rescaled to number
+        # of training examples
+        _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
+        n_deact_terms = self.model.decoder.n_inactive_terms()
+        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
+        #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
+        self.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
+        self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
+        if self.use_prox_ops['main_group_lasso']:
+            n_deact_terms = self.model.decoder.n_inactive_terms()
+            msg = f'Number of deactivated terms: {n_deact_terms}'
+            msg = '\n' + msg
+            logger.info(msg)
+            # print(msg)
+            # print('-------------------')
+        if self.use_prox_ops['main_soft_mask']:
+            main_mask = self.prox_ops['main_soft_mask']._I
+            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
+            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
+            # print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
+            # print('-------------------')
+            logger.info('Share of deactivated inactive genes: %.4f' % share_deact_genes)
         any_change = self.anneal()
+        logger.info(f"any_change: {any_change}")
         if any_change:
             self.update_prox_ops()
+            logger.info(f"updating prox_ops")
+
+    # def validation_step(self, batch, batch_idx):
+    #     #super().validation_step(batch, batch_idx)
+    #     #if self.print_stats:
+    #     if self.use_prox_ops['main_group_lasso']:
+    #         n_deact_terms = self.model.decoder.n_inactive_terms()
+    #         msg = f'Number of deactivated terms: {n_deact_terms}'
+    #         msg = '\n' + msg
+    #         print(msg)
+    #         print('-------------------')
+    #     if self.use_prox_ops['main_soft_mask']:
+    #         main_mask = self.prox_ops['main_soft_mask']._I
+    #         share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
+    #         share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
+    #         print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
+    #         print('-------------------')
+    #     any_change = self.anneal()
+    #     print(any_change)
+    #     if any_change:
+    #         self.update_prox_ops()
+    
+    # def validation_epoch_end(self, batch, outs):
+    #     # outs is a list of whatever you returned in `validation_step`
+    #     loss = torch.stack(outs).mean()
+    #     #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
+    #     #self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
+    #     self.log("val_loss", loss)
+    #     if self.print_stats:
+    #         if self.use_prox_ops['main_group_lasso']:
+    #             n_deact_terms = self.model.decoder.n_inactive_terms()
+    #             msg = f'Number of deactivated terms: {n_deact_terms}'
+    #             msg = '\n' + msg
+    #             print(msg)
+    #             print('-------------------')
+    #         if self.use_prox_ops['main_soft_mask']:
+    #             main_mask = self.prox_ops['main_soft_mask']._I
+    #             share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
+    #             share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
+    #             print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
+    #             print('-------------------')
+    #     any_change = self.anneal()
+    #     print(any_change)
+    #     if any_change:
+    #         self.update_prox_ops()
+        # print(f"loss: {scvi_loss.loss}")
+        # print(f"sum recon loss: {scvi_loss.reconstruction_loss_sum}")
+        # print(f"n_obs_minibatch: {scvi_loss.n_obs_minibatch}")
+        # print(f"kl local sum: {scvi_loss.kl_local_sum}")
+        # print(f"kl global sum: {scvi_loss.kl_global_sum}")
+        # return {'val_loss': scvi_loss.loss, 'log': log}
 

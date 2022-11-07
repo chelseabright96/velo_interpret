@@ -39,7 +39,9 @@ class MaskedLinear(nn.Linear):
 
         # zero out the weights for group lasso
         # gradient descent won't change these zero weights
+        print(f"mask: {self.mask}")
         self.weight.data*=self.mask
+        print(self.weight.data)
 
     def forward(self, input):
         return nn.functional.linear(input, self.weight*self.mask, self.bias)
@@ -60,13 +62,11 @@ class MaskedCondLayers(nn.Module):
         self.n_cond = n_cond
         self.n_ext = n_ext
         self.n_ext_m = n_ext_m
-
-        self.expr_L = nn.Linear(n_in, n_out, bias=bias)
-
-        # if mask is None:
-        #     self.expr_L = nn.Linear(n_in, n_out, bias=bias)
-        # else:
-        #     self.expr_L = MaskedLinear(n_in, n_out, mask, bias=bias)
+    
+        if mask is None:
+            self.expr_L = nn.Linear(n_in, n_out, bias=bias)
+        else:
+            self.expr_L = MaskedLinear(n_in, n_out, mask, bias=bias)
 
         # if self.n_cond != 0:
         #     self.cond_L = nn.Linear(self.n_cond, n_out, bias=False)
@@ -176,8 +176,8 @@ class DecoderVELOVI(nn.Module):
         else:
             raise ValueError("Unrecognized loss.")
 
-        #print("GP Decoder Architecture:")
-        #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
+        # print("GP Decoder Architecture:")
+        # #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
         # if mask is not None:
         #     print('\twith hard mask.')
         # else:
@@ -558,7 +558,7 @@ class VELOVAE(BaseModuleClass):
             n_cond= 0,
             last_layer=None,
             ext_mask = None,
-            mask = None,
+            mask = mask,
             recon_loss = 'nb',
             n_cat_list= None,
             n_layers=n_layers,
@@ -740,6 +740,7 @@ class VELOVAE(BaseModuleClass):
         reconst_loss_s = -mixture_dist_s.log_prob(spliced)
         reconst_loss_u = -mixture_dist_u.log_prob(unspliced)
         reconst_loss = reconst_loss_u.sum(dim=-1) + reconst_loss_s.sum(dim=-1) 
+        reconst_loss += gene_recon_loss
 
         kl_pi = kl(
             Dirichlet(px_pi_alpha),
@@ -750,8 +751,9 @@ class VELOVAE(BaseModuleClass):
         kl_local = kl_divergence_z + kl_pi
         weighted_kl_local = kl_weight * (kl_divergence_z) + kl_pi
 
-        local_loss = torch.mean(reconst_loss + gene_recon_loss + weighted_kl_local)
-        print(f"local_loss: {local_loss}")
+        local_loss = torch.mean(reconst_loss + weighted_kl_local) 
+        #local_loss = torch.mean(reconst_loss + weighted_kl_local)
+        #print(f"local_loss: {local_loss}")
 
         # combine local and global
         global_loss = 0
@@ -760,7 +762,7 @@ class VELOVAE(BaseModuleClass):
             + self.penalty_scale * (1 - kl_weight) * end_penalty
             + (1 / n_obs) * kl_weight * (global_loss)
         )
-        print(f"loss: {loss}")
+
         loss_recorder = LossRecorder(
             loss, reconst_loss, kl_local, torch.tensor(global_loss)
         )
