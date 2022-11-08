@@ -31,7 +31,6 @@ class ProxGroupLasso:
 
         W-=W/scaled_norm_vector
         W*=norm_g_gr_vect.float()
-        #print(f"W:{W}")
 
         return W
 

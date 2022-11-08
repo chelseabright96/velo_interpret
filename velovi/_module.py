@@ -30,6 +30,10 @@ class MaskedLinear(nn.Linear):
     def __init__(self, n_in,  n_out, mask, bias=True):
         # mask should have the same dimensions as the transposed linear weight
         # n_input x n_output_nodes
+
+        #stack mask
+        mask=torch.hstack((mask,mask))
+
         if n_in != mask.shape[0] or n_out != mask.shape[1]:
             raise ValueError('Incorrect shape of the mask.')
 
@@ -39,9 +43,9 @@ class MaskedLinear(nn.Linear):
 
         # zero out the weights for group lasso
         # gradient descent won't change these zero weights
-        print(f"mask: {self.mask}")
+
+
         self.weight.data*=self.mask
-        print(self.weight.data)
 
     def forward(self, input):
         return nn.functional.linear(input, self.weight*self.mask, self.bias)
@@ -62,11 +66,13 @@ class MaskedCondLayers(nn.Module):
         self.n_cond = n_cond
         self.n_ext = n_ext
         self.n_ext_m = n_ext_m
+
+        n_genes=n_out*2
     
         if mask is None:
-            self.expr_L = nn.Linear(n_in, n_out, bias=bias)
+            self.expr_L = nn.Linear(n_in, n_genes, bias=bias)
         else:
-            self.expr_L = MaskedLinear(n_in, n_out, mask, bias=bias)
+            self.expr_L = MaskedLinear(n_in, n_genes, mask, bias=bias)
 
         # if self.n_cond != 0:
         #     self.cond_L = nn.Linear(self.n_cond, n_out, bias=False)
@@ -105,6 +111,7 @@ class MaskedCondLayers(nn.Module):
         #     out = out + self.ext_L_m(ext_m)
         # if cond is not None:
         #     out = out + self.cond_L(cond)
+
         return out
 
 
@@ -279,7 +286,10 @@ class DecoderVELOVI(nn.Module):
         rho_first = self.rho_first_decoder(z_in)
 
         dec_latent = self.L0(z)
-        recon_x = self.mean_decoder(dec_latent)
+        dec_latent_s = dec_latent[:,:self.n_ouput]
+        dec_latent_u = dec_latent[:,self.n_ouput:]
+        dec_mean_s = self.mean_decoder(dec_latent_s)
+        dec_mean_u = self.mean_decoder(dec_latent_s)
 
         if not self.linear_decoder:
             px_rho = self.px_rho_decoder(rho_first)
@@ -297,7 +307,7 @@ class DecoderVELOVI(nn.Module):
             torch.reshape(self.px_pi_decoder(pi_first), (z.shape[0], self.n_ouput, 4))
         )
 
-        return px_pi, px_rho, px_tau, recon_x, dec_latent
+        return px_pi, px_rho, px_tau, dec_mean_s, dec_mean_u, dec_latent
 
     def nonzero_terms(self):
         v = self.L0.expr_L.weight.data
@@ -664,11 +674,9 @@ class VELOVAE(BaseModuleClass):
     def generative(self, z, gamma, beta, alpha, alpha_1, lambda_alpha, latent_dim=None):
         """Runs the generative model."""
         decoder_input = z
-        px_pi_alpha, px_rho, px_tau, dec_mean, dec_latent = self.decoder(decoder_input, latent_dim=latent_dim)
+        px_pi_alpha, px_rho, px_tau, dec_mean_s, dec_mean_u, dec_latent = self.decoder(decoder_input, latent_dim=latent_dim)
 
         px_pi = Dirichlet(px_pi_alpha).rsample()
-
-        #dec_mean, dec_latent = self.GP_linear_decoder(decoder_input, batch=None)
 
         scale_unconstr = self.scale_unconstr
         scale = F.softplus(scale_unconstr)
@@ -694,7 +702,8 @@ class VELOVAE(BaseModuleClass):
             mixture_dist_u=mixture_dist_u,
             mixture_dist_s=mixture_dist_s,
             end_penalty=end_penalty,
-            gene_recon = dec_mean,
+            gene_recon_s = dec_mean_s,
+            gene_recon_u = dec_mean_u,
             dec_latent = dec_latent
         )
 
@@ -711,7 +720,7 @@ class VELOVAE(BaseModuleClass):
         unspliced = tensors[REGISTRY_KEYS.U_KEY]
 
         #gene reconstruction loss
-        ground_truth_counts = spliced + unspliced
+        #ground_truth_counts = spliced + unspliced
         
 
         if cond_batch is not None:
@@ -720,10 +729,13 @@ class VELOVAE(BaseModuleClass):
             dispersion = self.theta   
         dispersion = torch.exp(dispersion)
 
-        dec_mean = generative_outputs["gene_recon"]
-        negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
+        dec_mean_s = generative_outputs["gene_recon_s"]
+        dec_mean_u = generative_outputs["gene_recon_u"]
+        negbin_s = NegativeBinomial(mu=dec_mean_s, theta=dispersion)
+        negbin_u = NegativeBinomial(mu=dec_mean_u, theta=dispersion)
         
-        gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
+        gene_recon_loss_s = -negbin_s.log_prob(spliced)
+        gene_recon_loss_u = -negbin_u.log_prob(unspliced)
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]
@@ -740,7 +752,7 @@ class VELOVAE(BaseModuleClass):
         reconst_loss_s = -mixture_dist_s.log_prob(spliced)
         reconst_loss_u = -mixture_dist_u.log_prob(unspliced)
         reconst_loss = reconst_loss_u.sum(dim=-1) + reconst_loss_s.sum(dim=-1) 
-        reconst_loss += gene_recon_loss
+        reconst_loss += gene_recon_loss_u.sum(dim=-1) + gene_recon_loss_s.sum(dim=-1)
 
         kl_pi = kl(
             Dirichlet(px_pi_alpha),
