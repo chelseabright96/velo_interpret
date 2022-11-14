@@ -666,6 +666,7 @@ class VELOVAE(BaseModuleClass):
             lambda_alpha = torch.clamp(F.softplus(self.lambda_alpha_unconstr), 0, 50)
         else:
             alpha_1 = self.alpha_1_unconstr
+            
             lambda_alpha = self.lambda_alpha_unconstr
 
         return gamma, beta, alpha, alpha_1, lambda_alpha
