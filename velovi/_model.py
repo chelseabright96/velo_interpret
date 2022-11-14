@@ -389,6 +389,153 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         """
         return self.module.decoder.nonzero_terms()
 
+    def latent_enrich(
+        self,
+        groups,
+        comparison='rest',
+        n_sample=5000,
+        use_directions=False,
+        directions_key='directions',
+        select_terms=None,
+        adata=None,
+        exact=True,
+        key_added='bf_scores'
+    ):
+        """Gene set enrichment test for the latent space. Test the hypothesis that latent scores
+           for each term in one group (z_1) is bigger than in the other group (z_2).
+
+           Puts results to `adata.uns[key_added]`. Results are a dictionary with
+           `p_h0` - probability that z_1 > z_2, `p_h1 = 1-p_h0` and `bf` - bayes factors equal to `log(p_h0/p_h1)`.
+
+           Parameters
+           ----------
+           groups: String or Dict
+                A string with the key in `adata.obs` to look for categories or a dictionary
+                with categories as keys and lists of cell names as values.
+           comparison: String
+                The category name to compare against. If 'rest', then compares each category against all others.
+           n_sample: Integer
+                Number of random samples to draw for each category.
+           use_directions: Boolean
+                If 'True', multiplies the latent scores by directions in `adata`.
+           directions_key: String
+                The key in `adata.uns` for directions.
+           select_terms: Array
+                If not 'None', then an index of terms to select for the test. Only does the test
+                for these terms.
+           adata: AnnData
+                An AnnData object to use. If 'None', uses `self.adata`.
+           exact: Boolean
+                Use exact probabilities for comparisons.
+           key_added: String
+                key of adata.uns where to put the results of the test.
+        """
+        if adata is None:
+            adata = self.adata
+
+        if isinstance(groups, str):
+            cats_col = adata.obs[groups]
+            cats = cats_col.unique()
+        elif isinstance(groups, dict):
+            cats = []
+            all_cells = []
+            for group, cells in groups.items():
+                cats.append(group)
+                all_cells += cells
+            adata = adata[all_cells]
+            cats_col = pd.Series(index=adata.obs_names, dtype=str)
+            for group, cells in groups.items():
+                cats_col[cells] = group
+        else:
+            raise ValueError("groups should be a string or a dict.")
+
+        if comparison != "rest" and isinstance(comparison, str):
+            comparison = [comparison]
+
+        if comparison != "rest" and not set(comparison).issubset(cats):
+            raise ValueError("comparison should be 'rest' or among the passed groups")
+
+        scores = {}
+
+        for cat in cats:
+            if cat in comparison:
+                continue
+
+            cat_mask = cats_col == cat
+            if comparison == "rest":
+                others_mask = ~cat_mask
+            else:
+                others_mask = cats_col.isin(comparison)
+
+            choice_1 = np.random.choice(cat_mask.sum(), n_sample)
+            choice_2 = np.random.choice(others_mask.sum(), n_sample)
+
+            adata_cat = adata[cat_mask][choice_1]
+            adata_others = adata[others_mask][choice_2]
+
+            if use_directions:
+                directions = adata.uns[directions_key]
+            else:
+                directions = None
+
+            z0 = self.get_latent(
+                adata_cat,
+                mean=False,
+                mean_var=exact
+            )
+
+            z1 = self.get_latent(
+                adata_others,
+                mean=False,
+                mean_var=exact
+            )
+
+            if not exact:
+                if directions is not None:
+                    z0 *= directions
+                    z1 *= directions
+
+                if select_terms is not None:
+                    z0 = z0[:, select_terms]
+                    z1 = z1[:, select_terms]
+
+                to_reduce = z0 > z1
+
+                zeros_mask = (np.abs(z0).sum(0) == 0) | (np.abs(z1).sum(0) == 0)
+            else:
+                from scipy.special import erfc
+
+                means0, vars0 = z0
+                means1, vars1 = z1
+
+                if directions is not None:
+                    means0 *= directions
+                    means1 *= directions
+
+                if select_terms is not None:
+                    means0 = means0[:, select_terms]
+                    means1 = means1[:, select_terms]
+                    vars0 = vars0[:, select_terms]
+                    vars1 = vars1[:, select_terms]
+
+                to_reduce = (means1 - means0) / np.sqrt(2 * (vars0 + vars1))
+                to_reduce = 0.5 * erfc(to_reduce)
+
+                zeros_mask = (np.abs(means0).sum(0) == 0) | (np.abs(means1).sum(0) == 0)
+
+            p_h0 = np.mean(to_reduce, axis=0)
+            p_h1 = 1.0 - p_h0
+            epsilon = 1e-12
+            bf = np.log(p_h0 + epsilon) - np.log(p_h1 + epsilon)
+
+            p_h0[zeros_mask] = 0
+            p_h1[zeros_mask] = 0
+            bf[zeros_mask] = 0
+
+            scores[cat] = dict(p_h0=p_h0, p_h1=p_h1, bf=bf)
+
+        adata.uns[key_added] = scores
+
     @torch.no_grad()
     def get_latent(
     self,
@@ -445,24 +592,45 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             indices = np.arange(adata.n_obs)
 
         latent = []
+        qz_m_list =[]
+        qz_v_list=[]
         for tensors in scdl:
             inference_outputs= self.module.inference(
                 spliced=tensors["X"],
                 unspliced=tensors["U"],
                 n_samples=n_samples,
             )
-            #n_samples x cells x GPs
-            z = inference_outputs["z"]
-            z = z.cpu().numpy()
-            latent.append(z)
-            if return_mean and n_samples > 1:
-                latent[-1] = np.mean(latent[-1], axis=0)
-        latent = np.concatenate(latent, axis=0)
-        if not only_active:
-            return latent
+
+            if mean_var:
+                qz_m=inference_outputs["qz_m"]
+                qz_v=inference_outputs["qz_v"]
+                qz_m = qz_m.cpu().numpy()
+                qz_v = qz_v.cpu().numpy()
+                qz_m_list.append(qz_m)
+                qz_v_list.append(qz_v)
+
+            else:
+                #n_samples x cells x GPs
+                z = inference_outputs["z"]
+                z = z.cpu().numpy()
+                latent.append(z)
+                if return_mean and n_samples > 1:
+                    latent[-1] = np.mean(latent[-1], axis=0)
+
+            
+        if mean_var:
+            z_means = np.concatenate(qz_m_list, axis=0)
+            z_vars = np.concatenate(qz_v_list, axis=0)
+            latent=(z_means,z_vars)
+
         else:
+            latent = np.concatenate(latent, axis=0)
+
+        if only_active and mean_var is False:
             active_idx = self.nonzero_terms()
             latent = latent[:, active_idx]
+            return latent
+        else:
             return latent
 
 
