@@ -181,6 +181,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         ] = "elbo_validation",
         gradient_clip_val: float = 10,
         alpha_GP=0.7,
+        omega: Optional[torch.Tensor] = None,
         plan_kwargs: Optional[dict] = None,
         **trainer_kwargs,
     ):
@@ -211,6 +212,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             See :class:`~scvi.train.Trainer` for further options.
         gradient_clip_val
             Val for gradient clipping
+        alpha_GP: Float
+                Group Lasso regularization coefficient
+        omega: Tensor or None
+            If not 'None', vector of coefficients for each group
         plan_kwargs
             Keyword args for :class:`~scvi.train.TrainingPlan`. Keyword arguments passed to
             `train()` will overwrite values present in `plan_kwargs`, when appropriate.
@@ -237,7 +242,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
 
 
-        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, **plan_kwargs)
+        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, omega=omega, **plan_kwargs)
         #training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
@@ -263,7 +268,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         # print(next(iter(data_splitter.val_dataloader())))
         return runner()
 
-    
 
     def get_loss(self, adata):
         # run the model forward on the data
