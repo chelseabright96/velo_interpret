@@ -1,0 +1,15 @@
+,genes,weights,in_mask
+0,Syne1,-0.6170056,True
+1,Sun2,0.41960508,True
+2,Lmna,0.23673032,True
+3,Lmnb1,0.21393,True
+4,Rfc4,0.14373119,True
+5,Fen1,-0.14107369,True
+6,Mis18bp1,-0.1184559,True
+7,Lig1,-0.09490722,True
+8,Rpa2,-0.08227043,True
+9,Rfc3,0.07763339,True
+10,Cenpk,0.07670048,True
+11,Pola1,0.05262045,True
+12,Cenph,-0.040079437,True
+13,Prim1,-0.02972604,True

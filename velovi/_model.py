@@ -537,6 +537,53 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         adata.uns[key_added] = scores
 
+    def term_genes(self, term: Union[str, int], terms: Union[str, list]='terms'):
+        """Return the dataframe with genes belonging to the term after training sorted by absolute weights in the decoder.
+        """
+        if isinstance(terms, str):
+            terms = list(self.adata.uns[terms])
+        else:
+            terms = list(terms)
+
+        # if len(terms) == self.latent_dim_:
+        #     if self.n_ext_m_ > 0:
+        #         terms += ['constrained_' + str(i) for i in range(self.n_ext_m_)]
+        #     if self.n_ext_ > 0:
+        #         terms += ['unconstrained_' + str(i) for i in range(self.n_ext_)]
+
+        #lat_mask_dim = self.latent_dim_# + self.n_ext_m_
+
+        # if len(terms) != self.latent_dim_ and len(terms) != lat_mask_dim + self.n_ext_:
+        #     raise ValueError('The list of terms should have the same length as the mask.')
+
+        term = terms.index(term) if isinstance(term, str) else term
+
+        #if term < self.latent_dim_:
+        weights = self.module.decoder.L0.expr_L.weight[:, term].data.cpu().numpy()
+        mask_idx = self.mask_[term]
+        # elif term >= lat_mask_dim:
+        #     term -= lat_mask_dim
+        #     weights = self.model.decoder.L0.ext_L.weight[:, term].data.cpu().numpy()
+        #     mask_idx = None
+        # else:
+        #     term -= self.latent_dim_
+        #     weights = self.model.decoder.L0.ext_L_m.weight[:, term].data.cpu().numpy()
+        #     mask_idx = self.ext_mask_[term]
+
+        abs_weights = np.abs(weights)
+        srt_idx = np.argsort(abs_weights)[::-1][:(abs_weights > 0).sum()]
+
+        result = pd.DataFrame()
+        result['genes'] = self.adata.var_names[srt_idx].tolist()
+        result['weights'] = weights[srt_idx]
+        result['in_mask'] = False
+
+        if mask_idx is not None:
+            in_mask = np.isin(srt_idx, np.where(mask_idx)[0])
+            result['in_mask'][in_mask] = True
+
+        return result
+
     @torch.no_grad()
     def get_latent(
     self,
