@@ -587,6 +587,20 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         return result
 
+    def mask_genes(self, terms: Union[str, list]='terms'):
+        """Return lists of genes belonging to the terms in the mask.
+        """
+        if isinstance(terms, str):
+            terms = list(self.adata.uns[terms])
+        else:
+            terms = list(terms)
+
+        I = np.array(self.mask_)
+
+        I = I.astype(bool)
+
+        return {term: self.adata.var_names[I[i]].tolist() for i, term in enumerate(terms)}
+
     @torch.no_grad()
     def get_latent(
     self,
