@@ -114,6 +114,10 @@ class MaskedCondLayers(nn.Module):
 
         return out
 
+###-------------------------------------------------------------###
+##                       DECODER CLASS                           ##
+###-------------------------------------------------------------###
+
 
 class DecoderVELOVI(nn.Module):
     """
@@ -166,54 +170,58 @@ class DecoderVELOVI(nn.Module):
         use_layer_norm: bool = False,
         dropout_rate: float = 0.0,
         linear_decoder: bool = False,
+        use_ontology: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.n_ouput = n_output
         self.linear_decoder = linear_decoder
+        self.use_ontology = use_ontology
 
-        ### GP decoder ###
+        ########### GP DECODER ############
+        if self.use_ontology:
+            self.L0 = OntoDecoder()
+        else:
+            if recon_loss == "mse":
+                if last_layer == "softmax":
+                    raise ValueError("Can't specify softmax last layer with mse loss.")
+                last_layer = "identity" if last_layer is None else last_layer
+            elif recon_loss == "nb":
+                last_layer = "softmax" if last_layer is None else last_layer
+            else:
+                raise ValueError("Unrecognized loss.")
 
-        if recon_loss == "mse":
+            # print("GP Decoder Architecture:")
+            # #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
+            # if mask is not None:
+            #     print('\twith hard mask.')
+            # else:
+            #     print('\twith soft mask.')
+
+            self.n_ext = n_ext
+            self.n_ext_m = n_ext_m
+
+            self.n_cond = 0
+            if n_cond is not None:
+                self.n_cond = n_cond
+
+            self.L0 = MaskedCondLayers(n_input, n_output, n_cond, bias=False, n_ext=n_ext, n_ext_m=n_ext_m,
+                                    mask=mask, ext_mask=ext_mask)
+
             if last_layer == "softmax":
-                raise ValueError("Can't specify softmax last layer with mse loss.")
-            last_layer = "identity" if last_layer is None else last_layer
-        elif recon_loss == "nb":
-            last_layer = "softmax" if last_layer is None else last_layer
-        else:
-            raise ValueError("Unrecognized loss.")
+                self.mean_decoder = nn.Softmax(dim=-1)
+            elif last_layer == "softplus":
+                self.mean_decoder = nn.Softplus()
+            elif last_layer == "exp":
+                self.mean_decoder = torch.exp
+            elif last_layer == "relu":
+                self.mean_decoder = nn.ReLU()
+            elif last_layer == "identity":
+                self.mean_decoder = lambda a: a
+            else:
+                raise ValueError("Unrecognized last layer.")
 
-        # print("GP Decoder Architecture:")
-        # #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
-        # if mask is not None:
-        #     print('\twith hard mask.')
-        # else:
-        #     print('\twith soft mask.')
-
-        self.n_ext = n_ext
-        self.n_ext_m = n_ext_m
-
-        self.n_cond = 0
-        if n_cond is not None:
-            self.n_cond = n_cond
-
-        self.L0 = MaskedCondLayers(n_input, n_output, n_cond, bias=False, n_ext=n_ext, n_ext_m=n_ext_m,
-                                   mask=mask, ext_mask=ext_mask)
-
-        if last_layer == "softmax":
-            self.mean_decoder = nn.Softmax(dim=-1)
-        elif last_layer == "softplus":
-            self.mean_decoder = nn.Softplus()
-        elif last_layer == "exp":
-            self.mean_decoder = torch.exp
-        elif last_layer == "relu":
-            self.mean_decoder = nn.ReLU()
-        elif last_layer == "identity":
-            self.mean_decoder = lambda a: a
-        else:
-            raise ValueError("Unrecognized last layer.")
-
-        print("Last Decoder layer:", last_layer)
+            print("Last Decoder layer:", last_layer)
 
         self.rho_first_decoder = FCLayers(
             n_in=n_input,
