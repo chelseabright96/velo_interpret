@@ -181,6 +181,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         ] = "elbo_validation",
         gradient_clip_val: float = 10,
         alpha_GP=0.7,
+        alpha_kl=0.1,
         omega: Optional[torch.Tensor] = None,
         plan_kwargs: Optional[dict] = None,
         **trainer_kwargs,
@@ -238,7 +239,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
 
 
-        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, omega=omega, **plan_kwargs)
+        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, alpha_kl=alpha_kl, omega=omega, **plan_kwargs)
         #training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
