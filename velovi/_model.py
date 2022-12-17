@@ -164,7 +164,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
         self.init_params_ = self._get_init_params(locals())
 
-
+    
 
     def train(
         self,
@@ -281,6 +281,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         # print(next(iter(data_splitter.train_dataloader())))
         # print(next(iter(data_splitter.val_dataloader())))
         return runner()
+    
+    
 
 
     def get_loss(self, adata):
