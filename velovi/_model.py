@@ -175,6 +175,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         train_size: float = 0.9,
         validation_size: Optional[float] = 0.1,
         batch_size: int = 256,
+        alpha_kl: float = 0.1,
         early_stopping: bool = True,
         early_stopping_monitor: Literal[
             "elbo_validation", "reconstruction_loss_validation", "kl_local_validation"
@@ -232,6 +233,14 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         user_train_kwargs = trainer_kwargs.copy()
         trainer_kwargs = dict(gradient_clip_val=gradient_clip_val)
         trainer_kwargs.update(user_train_kwargs)
+        self.seed = trainer_kwargs.pop("seed", 2020)
+        
+        torch.manual_seed(self.seed)
+        #if torch.cuda.is_available():
+        #    torch.cuda.manual_seed(self.seed)
+        #    self.module.cuda()
+        #self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        #print('Using device:', device)
 
         data_splitter = DataSplitter(
             self.adata_manager,
@@ -242,12 +251,17 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
 
 
-        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, omega=omega, **plan_kwargs)
+        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, omega=omega, alpha_kl=alpha_kl, **plan_kwargs)
         #training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
         trainer_kwargs[es] = (
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
+        )
+        
+        logger=
+        trainer_kwargs["logger"] = (
+            logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
         )
 
         trainer_kwargs["callbacks"] = (

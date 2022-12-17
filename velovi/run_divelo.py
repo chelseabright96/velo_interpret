@@ -28,9 +28,12 @@ early_stopping_kwargs = {
     "lr_factor": 0.1,
 }
 
+velovi.VELOVI.setup_anndata(adata, spliced_layer="Ms", unspliced_layer="Mu")
+
 alphas_kl = [0.5, 0.1, 0.05, 0.01, 0.005]
 
 for i, alpha_kl in enumerate(alphas_kl):
+    
     vae = velovi.VELOVI(
         adata=adata_train
     )

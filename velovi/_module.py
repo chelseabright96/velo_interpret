@@ -714,7 +714,7 @@ class VELOVAE(BaseModuleClass):
         inference_outputs,
         generative_outputs,
         cond_batch=None,
-        kl_weight: float = 1.0,
+        alpha_kl: float = 0.1,
         n_obs: float = 1.0,
     ):
         spliced = tensors[REGISTRY_KEYS.X_KEY]
@@ -762,7 +762,7 @@ class VELOVAE(BaseModuleClass):
 
         # local loss
         kl_local = kl_divergence_z + kl_pi
-        weighted_kl_local = kl_weight * (kl_divergence_z) + kl_pi
+        weighted_kl_local = alpha_kl * (kl_divergence_z) + kl_pi
 
         local_loss = torch.mean(reconst_loss + weighted_kl_local) 
         #local_loss = torch.mean(reconst_loss + weighted_kl_local)
@@ -772,8 +772,8 @@ class VELOVAE(BaseModuleClass):
         global_loss = 0
         loss = (
             local_loss
-            + self.penalty_scale * (1 - kl_weight) * end_penalty
-            + (1 / n_obs) * kl_weight * (global_loss)
+            + self.penalty_scale * (1 - alpha_kl) * end_penalty
+            + (1 / n_obs) * alpha_kl * (global_loss)
         )
 
         loss_recorder = LossRecorder(
