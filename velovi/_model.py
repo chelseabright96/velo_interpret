@@ -258,6 +258,11 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         trainer_kwargs[es] = (
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
         )
+        
+        logger=
+        trainer_kwargs["logger"] = (
+            logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
+        )
 
         trainer_kwargs["callbacks"] = (
             [] if "callbacks" not in trainer_kwargs.keys() else trainer_kwargs["callbacks"]
