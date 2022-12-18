@@ -259,7 +259,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
         )
         
-        logger=
         trainer_kwargs["logger"] = (
             logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
         )
@@ -282,6 +281,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         # print(next(iter(data_splitter.val_dataloader())))
         return runner()
     
+    
+
     
 
 
