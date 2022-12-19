@@ -65,6 +65,7 @@ class CustomTrainingPlan(TrainingPlan):
             model,
             alpha_GP,
             alpha_kl,
+            config,
             lr=1e-2,
             weight_decay=1e-6,
             n_steps_kl_warmup: Union[int, None] = None,
@@ -88,7 +89,6 @@ class CustomTrainingPlan(TrainingPlan):
             print_stats=True,
             **loss_kwargs,):
         super().__init__(module=model,
-            lr=lr,
             weight_decay=weight_decay,
             n_steps_kl_warmup=n_steps_kl_warmup,
             n_epochs_kl_warmup=n_epochs_kl_warmup,
@@ -101,12 +101,14 @@ class CustomTrainingPlan(TrainingPlan):
             **loss_kwargs)
 
         self.model=model
-        self.lr = lr
+        self.lr = config["lr"]
         self.print_stats = print_stats
 
-        self.alpha_GP = alpha_GP
+        self.alpha_GP = config["alpha_GP"]
         self.omega = omega
-        self.alpha_kl = alpha_kl
+        self.alpha_kl = config["alpha_kl"]
+
+
         
         #if torch.cuda.is_available():
         #    self.model.cuda()
