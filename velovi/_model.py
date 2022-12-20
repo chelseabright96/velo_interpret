@@ -82,7 +82,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
     def __init__(
         self,
-        config,
+        trail,
         adata: AnnData,
         n_hidden: int = 256,
         n_latent: int = 10,
@@ -137,18 +137,21 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         else:
             gamma_unconstr = None
 
-        self.lr=config["lr"]
-        self.alpha_GP=config["alpha_GP"]
-        self.alpha_kl=config["alpha_kl"]
+        #define hyperparameters
+
+        n_layers = trial.suggest_int("n_layers", 1, 3)
+        self.lr = 0.001
+        self.alpha_GP = 0.7
+        self.alpha_kl = 0.5
 
 
         self.module = VELOVAE(
             n_input=self.summary_stats["n_vars"],
             n_hidden=n_hidden,
             n_latent=self.n_latent,
-            n_layers=config["n_layers"],
-            dropout_rate=config["dropout_rate"],
-            recon_loss=config["recon_loss"],
+            n_layers=n_layers,
+            dropout_rate=dropout_rate,
+            recon_loss="nb",
             gamma_unconstr_init=gamma_unconstr,
             alpha_unconstr_init=alpha_unconstr,
             alpha_1_unconstr_init=alpha_1_unconstr,

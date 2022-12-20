@@ -65,7 +65,6 @@ class CustomTrainingPlan(TrainingPlan):
             model,
             alpha_GP,
             alpha_kl,
-            config,
             lr=1e-2,
             weight_decay=1e-6,
             n_steps_kl_warmup: Union[int, None] = None,
@@ -101,12 +100,12 @@ class CustomTrainingPlan(TrainingPlan):
             **loss_kwargs)
 
         self.model=model
-        self.lr = config["lr"]
+        self.lr = lr
         self.print_stats = print_stats
 
-        self.alpha_GP = config["alpha_GP"]
+        self.alpha_GP = alpha_GP
         self.omega = omega
-        self.alpha_kl = config["alpha_kl"]
+        self.alpha_kl = alpha_kl
 
 
         
