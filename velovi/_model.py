@@ -82,7 +82,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
     def __init__(
         self,
-        trail,
+        trial,
         adata: AnnData,
         n_hidden: int = 256,
         n_latent: int = 10,
@@ -139,7 +139,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         #define hyperparameters
 
-        n_layers = trial.suggest_int("n_layers", 1, 3)
+        self.n_layers = trial.suggest_int("n_layers", 1, 3)
         self.lr = 0.001
         self.alpha_GP = 0.7
         self.alpha_kl = 0.5
@@ -149,7 +149,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             n_input=self.summary_stats["n_vars"],
             n_hidden=n_hidden,
             n_latent=self.n_latent,
-            n_layers=n_layers,
+            n_layers=self.n_layers,
             dropout_rate=dropout_rate,
             recon_loss="nb",
             gamma_unconstr_init=gamma_unconstr,
@@ -169,7 +169,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         ).format(
             n_hidden,
             n_latent,
-            n_layers,
+            self.n_layers,
             dropout_rate,
         )
         self.init_params_ = self._get_init_params(locals())
@@ -268,9 +268,9 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
         )
         
-        trainer_kwargs["logger"] = (
-            logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
-        )
+        #trainer_kwargs["logger"] = (
+        #    logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
+        #)
 
         trainer_kwargs["callbacks"] = (
             [] if "callbacks" not in trainer_kwargs.keys() else trainer_kwargs["callbacks"]
@@ -285,9 +285,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             use_gpu=use_gpu,
             **trainer_kwargs,
         )
+        
+        #hyperparameters = dict(n_layers=self.n_layers)
+        #runner.logger.log_hyperparams(hyperparameters)
 
-        # print(next(iter(data_splitter.train_dataloader())))
-        # print(next(iter(data_splitter.val_dataloader())))
         return runner()
     
     
