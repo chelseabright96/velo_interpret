@@ -35,7 +35,8 @@ class TunerManager:
     """
 
     def __init__(self, model_cls: BaseModelClass):
-        self._model_cls: BaseModelClass = self._validate_model_cls(model_cls)
+        #self._model_cls: BaseModelClass = self._validate_model_cls(model_cls)
+        self._model_cls: BaseModelClass = model_cls
         self._defaults: dict = self._get_defaults(self._model_cls)
         self._registry: dict = self._get_registry(self._model_cls)
 

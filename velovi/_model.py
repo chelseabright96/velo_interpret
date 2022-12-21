@@ -82,7 +82,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
     def __init__(
         self,
-        trial,
         adata: AnnData,
         n_hidden: int = 256,
         n_latent: int = 10,
@@ -139,7 +138,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         #define hyperparameters
 
-        self.n_layers = trial.suggest_int("n_layers", 1, 3)
+        self.n_layers = n_layers
         self.lr = 0.001
         self.alpha_GP = 0.7
         self.alpha_kl = 0.5
