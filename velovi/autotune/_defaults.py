@@ -44,6 +44,14 @@ SUPPORTED = [model.SCVI, VELOVI]
 DEFAULTS = {
     model.SCVI: {
         "n_hidden": {"fn": "choice", "args": [[64, 128]]},
-    }
-    VELOVI: {}
+    },
+
+    VELOVI: {
+            "n_layers": {"fn": "choice", "args": [[1,2,3]]},
+            "dropout_rate": {"fn": "choice", "args": [[0.1, 0.3, 0.5, 0.7]]},
+            "recon_loss": {"fn": "choice", "args": [["zinb", "nb"]]},
+            #"lr": 1e-3, #tune.choice([0.01, 0.005, 0.001, 0.0005, 0.0001]),
+            #"alpha_GP": tune.choice([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 1]),
+            #"alpha_kl": tune.choice([0.5, 0.1, 0.05, 0.01, 0.005])
+        }
 }
