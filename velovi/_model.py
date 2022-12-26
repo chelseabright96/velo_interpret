@@ -10,7 +10,8 @@ import torch.nn.functional as F
 from anndata import AnnData
 from joblib import Parallel, delayed
 from scipy.stats import ttest_ind
-from scvi._compat import Literal
+from typing import Literal
+#from scvi._compat import Literal
 from scvi._utils import _doc_params
 from scvi.data import AnnDataManager
 from scvi.data.fields import LayerField
