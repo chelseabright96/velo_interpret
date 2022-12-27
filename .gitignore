@@ -76,6 +76,7 @@ docs/_build/
 
 #Large files
 velovi/reactome.gmt
+velovi/wandb/
 
 # PyBuilder
 target/
