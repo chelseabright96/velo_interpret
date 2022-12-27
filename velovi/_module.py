@@ -40,9 +40,7 @@ class MaskedLinear(nn.Linear):
 
         # zero out the weights for group lasso
         # gradient descent won't change these zero weights
-        print(f"mask: {self.mask}")
         self.weight.data*=self.mask
-        print(self.weight.data)
 
     def forward(self, input):
         return nn.functional.linear(input, self.weight*self.mask, self.bias)
@@ -172,7 +170,7 @@ class DecoderVELOVI(nn.Module):
             if last_layer == "softmax":
                 raise ValueError("Can't specify softmax last layer with mse loss.")
             last_layer = "identity" if last_layer is None else last_layer
-        elif recon_loss == "nb" or recon_loss == "zinb":
+        elif recon_loss == "nb":
             last_layer = "softmax" if last_layer is None else last_layer
         else:
             raise ValueError("Unrecognized loss.")
@@ -504,7 +502,7 @@ class VELOVAE(BaseModuleClass):
         self.soft_ext_mask = soft_ext_mask and ext_mask is not None
 
         if decoder_last_layer is None:
-            if recon_loss == 'nb' or recon_loss == "zinb":
+            if self.recon_loss == 'nb':
                 self.decoder_last_layer = 'softmax'
             else:
                 self.decoder_last_layer = 'identity'
@@ -519,7 +517,7 @@ class VELOVAE(BaseModuleClass):
         else:
             self.use_dr = False
 
-        if recon_loss == "nb" or recon_loss == "zinb":
+        if self.recon_loss == "nb":
             if self.n_conditions != 0:
                 self.theta = torch.nn.Parameter(torch.randn(self.n_input, self.n_conditions))
             else:
@@ -723,12 +721,9 @@ class VELOVAE(BaseModuleClass):
 
         dec_mean = generative_outputs["gene_recon"]
         
-        if recon_loss == "nb"
-            negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
-            gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
-        elif recon_loss == "zinb"
-            zinegbin = ZeroInflatedNegativeBinomial(mu=dec_mean, theta=dispersion)
-            gene_recon_loss = -zinegbin.log_prob(ground_truth_counts).sum(dim=-1)
+        negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
+        gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
+
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]
