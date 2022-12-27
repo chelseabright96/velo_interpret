@@ -12,7 +12,7 @@ from scvi.nn import Encoder, FCLayers
 from torch import nn as nn
 from torch.distributions import Categorical, Dirichlet, MixtureSameFamily, Normal
 from torch.distributions import kl_divergence as kl
-from scvi.distributions import NegativeBinomial
+from scvi.distributions import NegativeBinomial, ZeroInflatedNegativeBinomial
 
 import logging
 import warnings
@@ -172,7 +172,7 @@ class DecoderVELOVI(nn.Module):
             if last_layer == "softmax":
                 raise ValueError("Can't specify softmax last layer with mse loss.")
             last_layer = "identity" if last_layer is None else last_layer
-        elif recon_loss == "nb":
+        elif recon_loss == "nb" or recon_loss == "zinb":
             last_layer = "softmax" if last_layer is None else last_layer
         else:
             raise ValueError("Unrecognized loss.")
@@ -504,7 +504,7 @@ class VELOVAE(BaseModuleClass):
         self.soft_ext_mask = soft_ext_mask and ext_mask is not None
 
         if decoder_last_layer is None:
-            if recon_loss == 'nb':
+            if recon_loss == 'nb' or recon_loss == "zinb":
                 self.decoder_last_layer = 'softmax'
             else:
                 self.decoder_last_layer = 'identity'
@@ -519,7 +519,7 @@ class VELOVAE(BaseModuleClass):
         else:
             self.use_dr = False
 
-        if recon_loss == "nb":
+        if recon_loss == "nb" or recon_loss == "zinb":
             if self.n_conditions != 0:
                 self.theta = torch.nn.Parameter(torch.randn(self.n_input, self.n_conditions))
             else:
@@ -722,9 +722,13 @@ class VELOVAE(BaseModuleClass):
         dispersion = torch.exp(dispersion)
 
         dec_mean = generative_outputs["gene_recon"]
-        negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
         
-        gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
+        if recon_loss == "nb"
+            negbin = NegativeBinomial(mu=dec_mean, theta=dispersion)
+            gene_recon_loss = -negbin.log_prob(ground_truth_counts).sum(dim=-1)
+        elif recon_loss == "zinb"
+            zinegbin = ZeroInflatedNegativeBinomial(mu=dec_mean, theta=dispersion)
+            gene_recon_loss = -zinegbin.log_prob(ground_truth_counts).sum(dim=-1)
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]

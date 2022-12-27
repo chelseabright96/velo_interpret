@@ -88,6 +88,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         n_latent: int = 10,
         n_layers: int = 1,
         dropout_rate: float = 0.1,
+        recon_loss: str = "nb",
         gamma_init_data: bool = False,
         linear_decoder: bool = False,
         mask: Optional[Union[np.ndarray, list]] = None,
@@ -143,6 +144,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             n_latent=self.n_latent,
             n_layers=n_layers,
             dropout_rate=dropout_rate,
+            recon_loss=recon_loss,
             gamma_unconstr_init=gamma_unconstr,
             alpha_unconstr_init=alpha_unconstr,
             alpha_1_unconstr_init=alpha_1_unconstr,
@@ -220,6 +222,9 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         **trainer_kwargs
             Other keyword args for :class:`~scvi.train.Trainer`.
         """
+
+        self.batch_size = batch_size
+
         user_plan_kwargs = (
             plan_kwargs.copy() if isinstance(plan_kwargs, dict) else dict()
         )
@@ -235,7 +240,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             self.adata_manager,
             train_size=train_size,
             validation_size=validation_size,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             use_gpu=use_gpu,
         )
 
@@ -273,7 +278,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(
-            adata=adata, indices=None, batch_size=256
+            adata=adata, indices=None, batch_size=self.batch_size
         )
 
         for tensors in scdl:    
