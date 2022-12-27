@@ -1,8 +1,8 @@
 from scvi.train import TrainingPlan
 import torch
 import pytorch_lightning as pl
-from scvi._compat import Literal
-from typing import Union
+#from scvi._compat import Literal
+from typing import Union, Literal
 import logging
 logger = logging.getLogger(__name__)
 
@@ -266,27 +266,9 @@ class CustomTrainingPlan(TrainingPlan):
         n_deact_terms = self.model.decoder.n_inactive_terms()
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
-        self.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
+        #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
         self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
-        if self.use_prox_ops['main_group_lasso']:
-            n_deact_terms = self.model.decoder.n_inactive_terms()
-            msg = f'Number of deactivated terms: {n_deact_terms}'
-            msg = '\n' + msg
-            logger.info(msg)
-            # print(msg)
-            # print('-------------------')
-        if self.use_prox_ops['main_soft_mask']:
-            main_mask = self.prox_ops['main_soft_mask']._I
-            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-            # print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-            # print('-------------------')
-            logger.info('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-        #any_change = self.anneal()
-        #logger.info(f"any_change: {any_change}")
-        #if any_change:
-        #    self.update_prox_ops()
-        #    logger.info(f"updating prox_ops")
+        
 
     # def validation_step(self, batch, batch_idx):
     #     #super().validation_step(batch, batch_idx)

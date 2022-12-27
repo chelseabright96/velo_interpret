@@ -10,7 +10,8 @@ import torch.nn.functional as F
 from anndata import AnnData
 from joblib import Parallel, delayed
 from scipy.stats import ttest_ind
-from scvi._compat import Literal
+from typing import Literal
+#from scvi._compat import Literal
 from scvi._utils import _doc_params
 from scvi.data import AnnDataManager
 from scvi.data.fields import LayerField
@@ -164,7 +165,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
         self.init_params_ = self._get_init_params(locals())
 
-
+    
 
     def train(
         self,
@@ -259,9 +260,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             early_stopping if es not in trainer_kwargs.keys() else trainer_kwargs[es]
         )
         
-        trainer_kwargs["logger"] = (
-            logger if "logger" not in trainer_kwargs.keys() else trainer_kwargs["logger"]
-        )
 
         trainer_kwargs["callbacks"] = (
             [] if "callbacks" not in trainer_kwargs.keys() else trainer_kwargs["callbacks"]
@@ -280,6 +278,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         # print(next(iter(data_splitter.train_dataloader())))
         # print(next(iter(data_splitter.val_dataloader())))
         return runner()
+    
+    
 
     
 
