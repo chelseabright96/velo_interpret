@@ -1,7 +1,8 @@
 from scvi.train import TrainingPlan
 import torch
 import pytorch_lightning as pl
-from scvi._compat import Literal
+from typing import Literal
+#from scvi._compat import Literal
 from typing import Union
 import logging
 logger = logging.getLogger(__name__)
