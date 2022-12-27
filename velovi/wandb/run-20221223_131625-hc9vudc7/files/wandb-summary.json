@@ -1,1 +1,0 @@
-{"no. deactivated terms": 5.0, "validation_loss": -410.4808349609375, "elbo_validation": -272.0738525390625, "reconstruction_loss_validation": -857.4844970703125, "kl_local_validation": 585.41064453125, "kl_global_validation": 0.0, "epoch": 434, "trainer/global_step": 6089, "_timestamp": 1671797960.1487205, "_runtime": 174.7573266029358, "_step": 434, "_wandb": {"runtime": 174}}
