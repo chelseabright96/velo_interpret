@@ -44,9 +44,12 @@ class MaskedLinear(nn.Linear):
 
         # zero out the weights for group lasso
         # gradient descent won't change these zero weights
+        
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
-        self.weight.data*=self.mask
+        self.mask=self.mask.to(device)
+        self.weight.data=self.weight.data.to(device)
+        self.weight.data*=self.mask.to(device)
 
     def forward(self, input):
         return nn.functional.linear(input, self.weight*self.mask, self.bias)
