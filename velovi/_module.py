@@ -290,7 +290,7 @@ class DecoderVELOVI(nn.Module):
         dec_latent_s = dec_latent[:,:self.n_ouput]
         dec_latent_u = dec_latent[:,self.n_ouput:]
         dec_mean_s = self.mean_decoder(dec_latent_s)
-        dec_mean_u = self.mean_decoder(dec_latent_s)
+        dec_mean_u = self.mean_decoder(dec_latent_u)
 
         if not self.linear_decoder:
             px_rho = self.px_rho_decoder(rho_first)
