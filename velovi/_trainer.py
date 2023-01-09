@@ -1,10 +1,11 @@
 from scvi.train import TrainingPlan
 import torch
 import pytorch_lightning as pl
-from scvi._compat import Literal
-from typing import Union
+#from scvi._compat import Literal
+from typing import Union, Literal
 import logging
 logger = logging.getLogger(__name__)
+
 class ProxGroupLasso:
     def __init__(self, alpha_GP, omega=None, inplace=True):
     # omega - vector of coefficients with size
@@ -63,6 +64,7 @@ class CustomTrainingPlan(TrainingPlan):
     def __init__(self, 
             model,
             alpha_GP,
+            alpha_kl,
             lr=1e-2,
             weight_decay=1e-6,
             n_steps_kl_warmup: Union[int, None] = None,
@@ -104,9 +106,14 @@ class CustomTrainingPlan(TrainingPlan):
 
         self.alpha_GP = alpha_GP
         self.omega = omega
+        self.alpha_kl = alpha_kl
+        
+        #if torch.cuda.is_available():
+        #    self.model.cuda()
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         if self.omega is not None:
-            self.omega = self.omega.to(self.device)
+            self.omega = self.omega.to(device)
 
         # self.gamma_ext = gamma_ext
         # self.gamma_epoch_anneal = gamma_epoch_anneal
@@ -238,10 +245,10 @@ class CustomTrainingPlan(TrainingPlan):
     def training_step(self, batch, batch_idx, optimizer_idx=0):
         self.init_prox_ops()
         """Training step for the model."""
-        if "kl_weight" in self.loss_kwargs:
-            kl_weight = self.kl_weight
-            self.loss_kwargs.update({"kl_weight": kl_weight})
-            self.log("kl_weight", kl_weight, on_step=True, on_epoch=False)
+        if "alpha_kl" in self.loss_kwargs:
+            alpha_kl = self.alpha_kl
+            self.loss_kwargs.update({"alpha_kl": alpha_kl})
+            self.log("alpha_kl", alpha_kl, on_step=True, on_epoch=False)
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
         #self.log("train_loss", scvi_loss.loss, on_epoch=True)
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
@@ -259,27 +266,9 @@ class CustomTrainingPlan(TrainingPlan):
         n_deact_terms = self.model.decoder.n_inactive_terms()
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
-        self.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
+        #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
         self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
-        if self.use_prox_ops['main_group_lasso']:
-            n_deact_terms = self.model.decoder.n_inactive_terms()
-            msg = f'Number of deactivated terms: {n_deact_terms}'
-            msg = '\n' + msg
-            logger.info(msg)
-            # print(msg)
-            # print('-------------------')
-        if self.use_prox_ops['main_soft_mask']:
-            main_mask = self.prox_ops['main_soft_mask']._I
-            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-            # print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-            # print('-------------------')
-            logger.info('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-        any_change = self.anneal()
-        logger.info(f"any_change: {any_change}")
-        if any_change:
-            self.update_prox_ops()
-            logger.info(f"updating prox_ops")
+        
 
     # def validation_step(self, batch, batch_idx):
     #     #super().validation_step(batch, batch_idx)

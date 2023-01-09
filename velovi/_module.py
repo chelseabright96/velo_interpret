@@ -5,7 +5,8 @@ from typing import Callable, Iterable, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scvi._compat import Literal
+from typing import Literal
+#from scvi._compat import Literal
 from scvi.module.base import BaseModuleClass, LossRecorder, auto_move_data
 from scvi.nn import Encoder, FCLayers
 from torch import nn as nn
@@ -114,6 +115,76 @@ class MaskedCondLayers(nn.Module):
 
         return out
 
+class OntoDecoder(nn.Module):
+    """
+    This class constructs a Decoder module that is structured like an ontology and following a DAG.
+  
+    Parameters
+    ---------------
+    in_features: # of features that are used as input
+    study_num: # of different studys that the samples belong to
+    layer_dims: list of tuples that define in and out for each layer
+    mask_list: matrix for each layer transition, that determines which weights to zero out
+    latent_dim: latent dimension
+    drop: dropout rate, default is 0
+    """ 
+
+    def __init__(self, in_features, layer_dims, mask_list, latent_dim, neuronnum=1, drop=0):
+        super(OntoDecoder, self).__init__()
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.in_features = in_features
+        self.layer_dims = np.hstack([layer_dims[:-1] * neuronnum, layer_dims[-1]])
+        self.layer_shapes = [(np.sum(self.layer_dims[:i+1]), self.layer_dims[i+1]) for i in range(len(self.layer_dims)-1)]
+        self.masks = []
+        for m in mask_list[0:-1]:
+            m = m.repeat_interleave(neuronnum, dim=0)
+            m = m.repeat_interleave(neuronnum, dim=1)
+            self.masks.append(m.to(self.device))
+        self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(self.device))
+        self.latent_dim = latent_dim
+        self.drop = drop
+
+        # Decoder
+        self.decoder = nn.ModuleList(
+
+            [self.build_block(x[0], x[1]) for x in self.layer_shapes[:-1]] +
+
+            [
+                nn.Sequential(
+                    nn.Linear(self.layer_shapes[-1][0], self.in_features)#,
+                    #nn.Sigmoid()
+                )
+            ]
+            ).to(device)
+        
+        # apply masks to zero out weights of non-existent connections
+        for i in range(len(self.decoder)):
+            self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i])
+
+        # make all weights in decoder positive - do not need this if we apply latent directions method to each hidden layer of decoder
+        #for i in range(len(self.decoder)):
+        #    self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
+
+    def build_block(self, ins, outs):
+        return nn.Sequential(
+            nn.Linear(ins, outs)#,
+            #nn.Dropout(p=self.drop),
+            #nn.Sigmoid()
+        )
+
+    def forward(self, z):
+
+        # decoding
+        out = z
+
+        for layer in self.decoder[:-1]:
+            c = layer(out)
+            out = torch.cat((c, out), dim=1)
+        reconstruction = self.decoder[-1](out)
+        
+        return reconstruction
+
 ###-------------------------------------------------------------###
 ##                       DECODER CLASS                           ##
 ###-------------------------------------------------------------###
@@ -149,6 +220,13 @@ class DecoderVELOVI(nn.Module):
         Whether to use layer norm in layers
     linear_decoder
         Whether to use linear decoder for time
+    ontobj: instance of the class Ontobj(), containing a preprocessed ontology and the training data
+    dataset: which dataset to use for training
+    top_thresh: top threshold to tell which trimmed ontology to use
+    bottom_thresh: bottom_threshold to tell which trimmed ontology to use
+    neuronnum: number of neurons per term
+    drop: dropout rate, default is 0.2
+    z_drop: dropout rate for latent space, default is 0.5
     """
 
     def __init__(
@@ -171,6 +249,11 @@ class DecoderVELOVI(nn.Module):
         dropout_rate: float = 0.0,
         linear_decoder: bool = False,
         use_ontology: bool = False,
+        ontobj=None, 
+        top_thresh=1000, 
+        bottom_thresh=30, 
+        neuronnum=3, 
+        drop=0.2, 
         **kwargs,
     ):
         super().__init__()
@@ -178,9 +261,25 @@ class DecoderVELOVI(nn.Module):
         self.linear_decoder = linear_decoder
         self.use_ontology = use_ontology
 
+        if self.use_ontology == True and ontobj==None:
+            raise ValueError("Please provide ontology")
+
         ########### GP DECODER ############
         if self.use_ontology:
-            self.L0 = OntoDecoder()
+            self.ontology = ontobj.description
+            self.top = top_thresh
+            self.bottom = bottom_thresh
+            self.genes = ontobj.genes[str(top_thresh) + '_' + str(bottom_thresh)]
+            self.in_features = len(self.genes)
+            self.mask_list = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]
+            self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
+            self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
+            self.latent_dim = self.layer_dims_dec[0] * neuronnum
+            self.layer_dims_enc = [self.latent_dim]
+            self.neuronnum = neuronnum
+            self.drop = drop
+            self.L0 = OntoDecoder(self.in_features, self.layer_dims_dec, self.mask_list, self.latent_dim, self.neuronnum, self.drop)
+        
         else:
             if recon_loss == "mse":
                 if last_layer == "softmax":
@@ -297,7 +396,7 @@ class DecoderVELOVI(nn.Module):
         dec_latent_s = dec_latent[:,:self.n_ouput]
         dec_latent_u = dec_latent[:,self.n_ouput:]
         dec_mean_s = self.mean_decoder(dec_latent_s)
-        dec_mean_u = self.mean_decoder(dec_latent_s)
+        dec_mean_u = self.mean_decoder(dec_latent_u)
 
         if not self.linear_decoder:
             px_rho = self.px_rho_decoder(rho_first)
@@ -722,7 +821,7 @@ class VELOVAE(BaseModuleClass):
         inference_outputs,
         generative_outputs,
         cond_batch=None,
-        kl_weight: float = 1.0,
+        alpha_kl: float = 0.1,
         n_obs: float = 1.0,
     ):
         spliced = tensors[REGISTRY_KEYS.X_KEY]
@@ -770,7 +869,7 @@ class VELOVAE(BaseModuleClass):
 
         # local loss
         kl_local = kl_divergence_z + kl_pi
-        weighted_kl_local = kl_weight * (kl_divergence_z) + kl_pi
+        weighted_kl_local = alpha_kl * (kl_divergence_z) + kl_pi
 
         local_loss = torch.mean(reconst_loss + weighted_kl_local) 
         #local_loss = torch.mean(reconst_loss + weighted_kl_local)
@@ -780,8 +879,8 @@ class VELOVAE(BaseModuleClass):
         global_loss = 0
         loss = (
             local_loss
-            + self.penalty_scale * (1 - kl_weight) * end_penalty
-            + (1 / n_obs) * kl_weight * (global_loss)
+            + self.penalty_scale * (1 - alpha_kl) * end_penalty
+            + (1 / n_obs) * alpha_kl * (global_loss)
         )
 
         loss_recorder = LossRecorder(
