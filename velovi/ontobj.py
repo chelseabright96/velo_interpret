@@ -12,7 +12,7 @@ import seaborn as sns
 import colorcet as cc
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection
-from onto_vae.utils import *
+from _utils import *
 
 ## This code is copied from https://github.com/hdsu-bioquant/onto-vae/blob/main/onto_vae/ontobj.py
 

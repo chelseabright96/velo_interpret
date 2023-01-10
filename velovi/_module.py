@@ -261,8 +261,7 @@ class DecoderVELOVI(nn.Module):
         self.linear_decoder = linear_decoder
         self.use_ontology = use_ontology
 
-        if self.use_ontology == True and ontobj==None:
-            raise ValueError("Please provide ontology")
+        
 
         ########### GP DECODER ############
         if self.use_ontology:
@@ -386,9 +385,9 @@ class DecoderVELOVI(nn.Module):
 
         z_in = z
         if latent_dim is not None:
-            mask = torch.zeros_like(z)
-            mask[..., latent_dim] = 1
-            z_in = z * mask
+            mask_latent = torch.zeros_like(z)
+            mask_latent[..., latent_dim] = 1
+            z_in = z * mask_latent
         # The decoder returns values for the parameters of the ZINB distribution
         rho_first = self.rho_first_decoder(z_in)
 
@@ -503,7 +502,9 @@ class VELOVAE(BaseModuleClass):
         use_hsic: bool = False,
         hsic_one_vs_all: bool = False,
         ext_mask: Optional[torch.Tensor] = None,
-        soft_ext_mask: bool = False
+        soft_ext_mask: bool = False,
+        use_ontology: bool = False,
+        ontobj=None,
     ):
         super().__init__()
         self.n_latent = n_latent
@@ -684,6 +685,8 @@ class VELOVAE(BaseModuleClass):
             use_layer_norm=use_layer_norm_decoder,
             activation_fn=torch.nn.ReLU,
             linear_decoder=linear_decoder,
+            use_ontology=use_ontology,
+            ontobj=ontobj,
             )
 
        

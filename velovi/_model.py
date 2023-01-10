@@ -94,9 +94,14 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         mask: Optional[Union[np.ndarray, list]] = None,
         mask_key: str = 'I',
         soft_mask: bool = False,
+        use_ontology: bool = False,
+        ontobj=None,
         **model_kwargs,
     ):
         super().__init__(adata)
+
+        if use_ontology == True and ontobj==None:
+            raise ValueError("Please provide ontology")
 
         if mask is None and mask_key not in self.adata.varm:
             raise ValueError('Please provide mask.')
@@ -154,6 +159,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             linear_decoder=linear_decoder,
             mask=mask,
             soft_mask=self.soft_mask_,
+            use_ontology=use_ontology,
+            ontobj=ontobj,
             **model_kwargs,
         )
         self._model_summary_string = (
