@@ -13,6 +13,8 @@ import colorcet as cc
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection
 from _utils import *
+from anndata import AnnData
+import scanpy as sc
 
 ## This code is copied from https://github.com/hdsu-bioquant/onto-vae/blob/main/onto_vae/ontobj.py
 
@@ -42,11 +44,11 @@ class Ontobj():
     description: to identify the object, used ontology can be specified here, for example 'GO' or 'HPO' or 'GO_BP'
     """
 
-    __slots__=('description', 'identifiers', 'annot_base', 'genes_base', 'graph_base', 'annot', 'genes', 'graph', 'desc_genes', 'masks', 'sem_sim', 'data')
-    def __init__(self, description):
-        super(Ontobj, self).__init__()
+    __slots__=('identifiers', 'annot_base', 'genes_base', 'graph_base', 'annot', 'genes', 'graph', 'desc_genes', 'masks', 'sem_sim', 'data')
+    def __init__(self):
+        super().__init__()
 
-        self.description = description
+        #self.description = description
         self.identifiers = None
         self.annot_base = None
         self.genes_base = None
@@ -136,7 +138,6 @@ class Ontobj():
         gene_annot = pd.read_csv(gene_annot, sep="\t", header=None)
         gene_annot.columns = ['Gene', 'ID']
 
-        self.identifiers = 'Ensembl' if 'ENS' in gene_annot.iloc[0,0] else 'HGNC'
 
         # create initial annot file
         if 'id' in kwargs.keys():
@@ -355,3 +356,243 @@ class Ontobj():
 
         # store masks
         self.masks[str(top_thresh) + '_' + str(bottom_thresh)] = masks
+
+    def match_dataset(self, expr_data, name, top_thresh=1000, bottom_thresh=30):
+
+            """
+            This function takes a dataset, matches the features to the features of the preprocessed ontology and stores it in the data slot
+            Parameters
+            ----------
+            expr_data
+                a Pandas dataframe with gene names in index and samples names in columns OR 
+                Path to the dataset to be matched, can be either:
+                - a file with extension .csv (separated by ',')
+                - a file with extension .txt (separated by '\t'), 
+                    with features in rows and samples in columns
+                The dataset should not have duplicated genenames!
+            top_thresh
+                top threshold for trimming
+            bottom_thresh
+                bottom_threshold for trimming
+            
+            The parameters tell the function which trimmed version to use.
+            name
+                name to be used for identifying the matched dataset
+            """
+
+            # check if ontology has been trimmed and import the genes file
+
+            if str(top_thresh) + '_' + str(bottom_thresh) not in self.genes.keys():
+                sys.exit('trimmed genes with specified thresholds missing, trim_dag function needs to be run first!')
+            else:
+                genes = pd.DataFrame(self.genes[str(top_thresh) + '_' + str(bottom_thresh)])
+
+            # check file extension of dataset to be matched
+            if isinstance(expr_data, pd.DataFrame):
+                expr = expr_data
+            else:
+                basename = os.path.basename(expr_data)
+                ext = basename.split('.')[1]
+
+                if ext == 'csv':
+                    expr = pd.read_csv(expr_data, sep=",", index_col=0)
+                elif ext == 'txt':
+                    expr = pd.read_csv(expr_data, sep="\t", index_col=0)
+                elif ext == 'h5ad':
+                    expr = sc.read(expr_data)
+                else:
+                    sys.exit('File extension not supported.')
+
+            # merge data with ontology genes and save
+            genes.index = genes.iloc[:,0]
+            
+            
+            if isinstance(expr, AnnData):
+                index_match=list(set(genes.index).intersection(set(expr.var.index)))
+                expr_match=expr[:,index_match]
+
+                # expr_X=pd.Dataframe(expr.X.T, index=expr.var.index)
+                # expr_spliced=pd.Dataframe(expr.layers["spliced"].T, index=expr.var.index)
+                # expr_unspliced=pd.Dataframe(expr.layers["unspliced"].T, index=expr.var.index)
+                # merged_expr_X = genes.join(expr_X).fillna(0).drop(0, axis=1).T.to_numpy()
+                # merged_expr_spliced = genes.join(expr_spliced).fillna(0).drop(0, axis=1).T.to_numpy()
+                # merged_expr_unspliced = genes.join(expr_unspliced).fillna(0).drop(0, axis=1).T.to_numpy()
+                # expr_merged=expr.copy()
+                # expr_merged.X = merged_expr_X
+                # expr_merged.var = genes.join(expr.var).fillna(0).drop(0, axis=1)
+                # expr_merged.layers["spliced"] = merged_expr_spliced
+                # expr_merged.layers["spliced"] = merged_expr_unspliced
+
+                if str(top_thresh) + '_' + str(bottom_thresh) not in self.data.keys():
+                    self.data[str(top_thresh) + '_' + str(bottom_thresh)] = {}
+
+                self.data[str(top_thresh) + '_' + str(bottom_thresh)][name] = expr_match
+
+            else:
+                merged_expr = genes.join(expr).fillna(0).drop(0, axis=1).T
+                if str(top_thresh) + '_' + str(bottom_thresh) not in self.data.keys():
+                    self.data[str(top_thresh) + '_' + str(bottom_thresh)] = {}
+
+                self.data[str(top_thresh) + '_' + str(bottom_thresh)][name] = merged_expr.to_numpy()
+
+    
+    def extract_annot(self, top_thresh=1000, bottom_thresh=30):
+        return self.annot[str(top_thresh) + '_' + str(bottom_thresh)]
+
+    def extract_genes(self, top_thresh=1000, bottom_thresh=30):
+        return self.genes[str(top_thresh) + '_' + str(bottom_thresh)]
+
+    def extract_dataset(self, dataset, top_thresh=1000, bottom_thresh=30):
+        return self.data[str(top_thresh) + '_' + str(bottom_thresh)][dataset]
+
+    
+    def add_dataset(self, dataset, description, top_thresh=1000, bottom_thresh=30):
+        """
+        This function can be used if for example a perturbation should only be performed on
+        a subset of the data. Then this subset can be stored in separate slot.
+        """
+        self.data[str(top_thresh) + '_' + str(bottom_thresh)][description] = dataset
+
+
+    def remove_link(self, term, gene, top_thresh=1000, bottom_thresh=30):
+        """
+        This function removes the link between a gene and a term in the masks slot.
+        You will modify the masks! So better do not save the ontobj after that, but just
+        remove the link before training a model
+        Parameters
+        ----------
+        term
+            id of the term
+        gene
+            the gene
+        top_thresh
+            top threshold for trimming
+        bottom_thresh
+            bottom_threshold for trimming
+        """
+        onto_annot = self.extract_annot(top_thresh=top_thresh,
+                                        bottom_thresh=bottom_thresh)
+        genes = self.extract_genes(top_thresh=top_thresh,
+                                        bottom_thresh=bottom_thresh)
+
+        # retrieve indices to remove link
+        # for the term, we need to work around, as terms in masks are sorted reversed (Depth 15 -> Depth 14 -> Depth 13 ...)
+        term_depth = onto_annot[onto_annot.ID == term].depth.to_numpy()[0]
+        depth_counts = onto_annot.depth.value_counts().sort_index(ascending=False)
+        start_point = depth_counts[depth_counts.index > term_depth].sum()
+        annot_sub = onto_annot[onto_annot.depth == term_depth]
+        term_idx = annot_sub[annot_sub.ID == term].index.to_numpy()
+        gene_idx = genes.index(gene)
+
+        self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1][gene_idx, start_point + term_idx] = 0
+
+
+    def plot_scatter(self, sample_annot, color_by, act, term1, term2, top_thresh=1000, bottom_thresh=30):
+        """ 
+        This function is used to make a scatterplot of two pathway activities
+        Parameters
+        ----------
+        sample_annot
+            a Pandas dataframe with gene names in index and samples names in columns OR 
+            a file with extension .csv (separated by ',') or with extension .txt (separated by '\t'), 
+            with features in rows and samples in columns
+        color_by
+            the column of sample_annot to use for coloring
+        act
+            numpy array containing pathway activities
+        term1
+            ontology term on x-axis
+        term2
+            ontology term on y-axis
+        top_thresh
+            top threshold for trimming
+        bottom_thresh
+            bottom_threshold for trimming
+        """
+        # import sample annotation
+        if isinstance(sample_annot, pd.DataFrame):
+            sample_annot = sample_annot
+        else:
+            basename = os.path.basename(sample_annot)
+            ext = basename.split('.')[1]
+
+            if ext == 'csv':
+                sample_annot = pd.read_csv(sample_annot, sep=",", index_col=0)
+            elif ext == 'txt':
+                sample_annot = pd.read_csv(sample_annot, sep="\t", index_col=0)
+
+        # create color dict
+        categs = sample_annot.loc[:,color_by].unique().tolist()
+        palette = sns.color_palette(cc.glasbey, n_colors=len(categs))
+        color_dict = dict(zip(categs, palette))
+
+        # extract ontology annot and get term indices
+        onto_annot = self.extract_annot(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
+        ind1 = onto_annot[onto_annot.Name == term1].index.to_numpy()
+        ind2 = onto_annot[onto_annot.Name == term2].index.to_numpy()
+
+        # make scatterplot
+        fig, ax = plt.subplots(figsize=(10,7))
+        sns.scatterplot(x=act[:,ind1].flatten(),
+                        y=act[:,ind2].flatten(),
+                        hue=sample_annot.loc[:,color_by],
+                        palette=color_dict,
+                        legend='full',
+                        s=8,
+                        rasterized=True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+        plt.xlabel(term1)
+        plt.ylabel(term2)
+        plt.tight_layout()
+
+    
+    def wilcox_test(self, control, perturbed, direction='up', option='terms', top_thresh=1000, bottom_thresh=30):
+        """ 
+        Function to perform paired Wilcoxon test between activities and perturbed activities
+        Parameters
+        ----------
+        act
+            numpy 2D array of pathway activities 
+        perturbed_act
+            numpy 2D array of perturbed pathway activities
+        direction
+            up: higher in perturbed
+            down: lower in perturbed
+        top_thresh
+            top threshold for trimming
+        bottom_thresh
+            bottom_threshold for trimming
+        option
+            'terms' or 'genes'
+        """
+        # perform paired wilcoxon test over all terms
+        alternative = 'greater' if direction == 'up' else 'less'
+        wilcox = [stats.wilcoxon(perturbed[:,i], control[:,i], zero_method='zsplit', alternative=alternative) for i in range(control.shape[1])]
+        stat = np.array([i[0] for i in wilcox])
+        pvals = np.array([i[1] for i in wilcox])
+        qvals = fdrcorrection(np.array(pvals))
+
+        if option == 'terms':
+            # extract ontology annot
+            onto_annot = self.extract_annot(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
+
+            # create results dataframe 
+            res = pd.DataFrame({'id': onto_annot.ID.tolist(),
+                                'term': onto_annot.Name.tolist(),
+                                'depth': onto_annot.depth.tolist(),
+                                'stat': stat,
+                                'pval' : pvals,
+                                'qval': qvals[1]})
+        
+        else:
+            # extract ontology genes
+            onto_genes = self.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
+
+            # create results dataframe
+            res = pd.DataFrame({'gene': onto_genes,
+                                'stat': stat,
+                                'pval' : pvals,
+                                'qval': qvals[1]})
+
+        res = res.sort_values('pval').reset_index(drop=True)
+        return(res)

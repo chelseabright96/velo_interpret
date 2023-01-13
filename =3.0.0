@@ -1,0 +1,10 @@
+Collecting colorcet
+  Downloading colorcet-3.0.1-py2.py3-none-any.whl (1.7 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.7/1.7 MB 7.1 MB/s eta 0:00:00
+Collecting pyct>=0.4.4
+  Downloading pyct-0.4.8-py2.py3-none-any.whl (15 kB)
+Collecting param>=1.7.0
+  Downloading param-1.12.3-py2.py3-none-any.whl (87 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 87.0/87.0 kB 2.4 MB/s eta 0:00:00
+Installing collected packages: param, pyct, colorcet
+Successfully installed colorcet-3.0.1 param-1.12.3 pyct-0.4.8
