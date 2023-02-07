@@ -1,8 +1,8 @@
 from scvi.train import TrainingPlan
 import torch
 import pytorch_lightning as pl
-from scvi._compat import Literal
-from typing import Union
+#from scvi._compat import Literal
+from typing import Union, Literal
 import logging
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ class CustomTrainingPlan(TrainingPlan):
             print_stats=True,
             **loss_kwargs,):
         super().__init__(module=model,
+            lr=lr,
             weight_decay=weight_decay,
             n_steps_kl_warmup=n_steps_kl_warmup,
             n_epochs_kl_warmup=n_epochs_kl_warmup,
@@ -106,8 +107,6 @@ class CustomTrainingPlan(TrainingPlan):
         self.alpha_GP = alpha_GP
         self.omega = omega
         self.alpha_kl = alpha_kl
-
-
         
         #if torch.cuda.is_available():
         #    self.model.cuda()
@@ -131,10 +130,11 @@ class CustomTrainingPlan(TrainingPlan):
 
         self.watch_lr = None
 
-        self.use_prox_ops = self.check_prox_ops()
-        self.prox_ops = {}
+        if self.model.use_ontology==False:
+            self.use_prox_ops = self.check_prox_ops()
+            self.prox_ops = {}
 
-        self.corr_coeffs = self.init_anneal()
+            self.corr_coeffs = self.init_anneal()
 
 
     def check_prox_ops(self):
@@ -244,18 +244,16 @@ class CustomTrainingPlan(TrainingPlan):
         #     self.prox_ops['ext_soft_mask'](self.model.decoder.L0.ext_L_m.weight.data)
 
     def training_step(self, batch, batch_idx, optimizer_idx=0):
-        self.init_prox_ops()
+        if self.model.use_ontology==False:
+            self.init_prox_ops()
         """Training step for the model."""
         if "alpha_kl" in self.loss_kwargs:
             alpha_kl = self.alpha_kl
             self.loss_kwargs.update({"alpha_kl": alpha_kl})
             self.log("alpha_kl", alpha_kl, on_step=True, on_epoch=False)
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
-        #self.log("train_loss", scvi_loss.loss, on_epoch=True)
-        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
-        #self.compute_and_log_metrics(scvi_loss, self.train_metrics, "train")
-        #super().training_step(batch, batch_idx, optimizer_idx=0)
-        self.apply_prox_ops()
+        if self.model.use_ontology==False:
+            self.apply_prox_ops()
         return scvi_loss.loss
         
     def validation_step(self, batch, batch_idx):
@@ -264,30 +262,12 @@ class CustomTrainingPlan(TrainingPlan):
         # so when relevant, the actual loss value is rescaled to number
         # of training examples
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
-        n_deact_terms = self.model.decoder.n_inactive_terms()
+        #n_deact_terms = self.model.decoder.n_inactive_terms()
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
-        self.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
+        #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
         self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
-        if self.use_prox_ops['main_group_lasso']:
-            n_deact_terms = self.model.decoder.n_inactive_terms()
-            msg = f'Number of deactivated terms: {n_deact_terms}'
-            msg = '\n' + msg
-            logger.info(msg)
-            # print(msg)
-            # print('-------------------')
-        if self.use_prox_ops['main_soft_mask']:
-            main_mask = self.prox_ops['main_soft_mask']._I
-            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-            # print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-            # print('-------------------')
-            logger.info('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-        #any_change = self.anneal()
-        #logger.info(f"any_change: {any_change}")
-        #if any_change:
-        #    self.update_prox_ops()
-        #    logger.info(f"updating prox_ops")
+        
 
     # def validation_step(self, batch, batch_idx):
     #     #super().validation_step(batch, batch_idx)
