@@ -96,6 +96,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         soft_mask: bool = False,
         use_ontology: bool = False,
         ontobj=None,
+        top_thresh=1000, 
+        bottom_thresh=30,
+        neuronnum=3, 
+        drop_ont=0.2,
         **model_kwargs,
     ):
         super().__init__(adata)
@@ -103,18 +107,31 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         if use_ontology == True and ontobj==None:
             raise ValueError("Please provide ontology")
 
-        if mask is None and mask_key not in self.adata.varm:
-            raise ValueError('Please provide mask.')
-        
-        if mask is None:
-            mask = adata.varm[mask_key].T
+        if use_ontology == False:
+            if mask is None and mask_key not in self.adata.varm:
+                raise ValueError('Please provide mask.')
+            
+            if mask is None:
+                mask = adata.varm[mask_key].T # GPs x genes
 
-        self.mask_ = mask if isinstance(mask, list) else mask.tolist()
-        mask = torch.tensor(mask).float()
-        self.n_latent = len(self.mask_)
+            self.mask_ = mask if isinstance(mask, list) else mask.tolist()
+            mask = torch.tensor(mask).float()
+            self.n_latent = len(self.mask_)
 
 
-        self.soft_mask_ = soft_mask
+            self.soft_mask_ = soft_mask
+
+        else:
+            self.top = top_thresh
+            self.bottom = bottom_thresh
+            self.mask_list = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]
+            self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
+            self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
+            self.n_latent = self.layer_dims_dec[0] * neuronnum
+            self.neuronnum = neuronnum
+            self.drop_ont = drop_ont
+
+            self.soft_mask_=None
 
         spliced = self.adata_manager.get_from_registry(REGISTRY_KEYS.X_KEY)
         unspliced = self.adata_manager.get_from_registry(REGISTRY_KEYS.U_KEY)
@@ -160,7 +177,10 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             mask=mask,
             soft_mask=self.soft_mask_,
             use_ontology=use_ontology,
-            ontobj=ontobj,
+            mask_list=self.mask_list,
+            layer_dims_dec=self.layer_dims_dec,
+            neuronnum=self.neuronnum, 
+            drop_ont=self.drop_ont, 
             **model_kwargs,
         )
         self._model_summary_string = (
@@ -517,9 +537,12 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 mean=False,
                 mean_var=exact
             )
+                
+
 
             if not exact:
                 if directions is not None:
+
                     z0 *= directions
                     z1 *= directions
 
@@ -563,6 +586,122 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             scores[cat] = dict(p_h0=p_h0, p_h1=p_h1, bf=bf)
 
         adata.uns[key_added] = scores
+
+    def ontology_enrich(
+        self,
+        groups,
+        comparison='rest',
+        n_sample=5000,
+        use_directions=False,
+        directions_key='directions_heirarchies',
+        select_terms=None,
+        adata=None,
+        key_added='bf_scores_heirarchies',
+        ontobj=None,
+        dataset=None
+    ):
+        """Gene set enrichment test for the latent space and hidden layers of decoder. Test the hypothesis that scores
+           for each term in one group (z_1) is bigger than in the other group (z_2).
+
+           Puts results to `adata.uns[key_added]`. Results are a dictionary with
+           `p_h0` - probability that z_1 > z_2, `p_h1 = 1-p_h0` and `bf` - bayes factors equal to `log(p_h0/p_h1)`.
+
+           Parameters
+           ----------
+           groups: String or Dict
+                A string with the key in `adata.obs` to look for categories or a dictionary
+                with categories as keys and lists of cell names as values.
+           comparison: String
+                The category name to compare against. If 'rest', then compares each category against all others.
+           n_sample: Integer
+                Number of random samples to draw for each category.
+           use_directions: Boolean
+                If 'True', multiplies the latent scores by directions in `adata`.
+           directions_key: String
+                The key in `adata.uns` for directions.
+           select_terms: Array
+                If not 'None', then an index of terms to select for the test. Only does the test
+                for these terms.
+           adata: AnnData
+                An AnnData object to use. If 'None', uses `self.adata`.
+           key_added: String
+                key of adata.uns where to put the results of the test.
+        """
+
+        adata = ontobj.data[str(self.top) + '_' + str(self.bottom)][dataset].copy()
+
+        if isinstance(groups, str):
+            cats_col = adata.obs[groups]
+            cats = cats_col.unique()
+        elif isinstance(groups, dict):
+            cats = []
+            all_cells = []
+            for group, cells in groups.items():
+                cats.append(group)
+                all_cells += cells
+            adata = adata[all_cells]
+            cats_col = pd.Series(index=adata.obs_names, dtype=str)
+            for group, cells in groups.items():
+                cats_col[cells] = group
+        else:
+            raise ValueError("groups should be a string or a dict.")
+
+        if comparison != "rest" and isinstance(comparison, str):
+            comparison = [comparison]
+
+        if comparison != "rest" and not set(comparison).issubset(cats):
+            raise ValueError("comparison should be 'rest' or among the passed groups")
+
+        scores = {}
+
+        for cat in cats:
+            if cat in comparison:
+                continue
+
+            cat_mask = cats_col == cat
+            if comparison == "rest":
+                others_mask = ~cat_mask
+            else:
+                others_mask = cats_col.isin(comparison)
+
+            choice_1 = np.random.choice(cat_mask.sum(), n_sample)
+            choice_2 = np.random.choice(others_mask.sum(), n_sample)
+
+            adata_cat = adata[cat_mask][choice_1]
+            adata_others = adata[others_mask][choice_2]
+
+            if use_directions:
+                directions = adata.uns[directions_key]
+            else:
+                directions = None
+
+
+            act0=self.get_pathway_activities(ontobj, dataset, adata_cat)
+            act1=self.get_pathway_activities(ontobj, dataset, adata_others)
+                
+
+            if directions is not None:
+                act0*=directions
+                act1*=directions
+
+
+            to_reduce = act0 > act1
+
+            zeros_mask = (np.abs(act0).sum(0) == 0) | (np.abs(act1).sum(0) == 0)
+            
+
+            p_h0 = np.mean(to_reduce, axis=0)
+            p_h1 = 1.0 - p_h0
+            epsilon = 1e-12
+            bf = np.log(p_h0 + epsilon) - np.log(p_h1 + epsilon)
+
+            p_h0[zeros_mask] = 0
+            p_h1[zeros_mask] = 0
+            bf[zeros_mask] = 0
+
+            scores[cat] = dict(p_h0=p_h0, p_h1=p_h1, bf=bf)
+
+        ontobj.data[str(self.top) + '_' + str(self.bottom)][dataset].uns[key_added] = scores
 
     def term_genes(self, term: Union[str, int], terms: Union[str, list]='terms'):
         """Return the dataframe with genes belonging to the term after training sorted by absolute weights in the decoder.
@@ -705,6 +844,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 latent.append(z)
                 if return_mean and n_samples > 1:
                     latent[-1] = np.mean(latent[-1], axis=0)
+                
 
             
         if mean_var:
@@ -714,6 +854,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         else:
             latent = np.concatenate(latent, axis=0)
+            latent = np.array(np.split(latent, latent.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
 
         if only_active and mean_var is False:
             active_idx = self.nonzero_terms()
@@ -781,6 +922,147 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             raise ValueError("Unrecognized method for getting the latent direction.")
 
         adata.uns[key_added] = signs
+        if get_confidence and confidence is not None:
+            adata.uns[key_added + '_confindence'] = confidence
+
+
+    def _pass_data_ontology(self, adata, output):
+        """
+        output
+            one of 'act': pathway activities
+                    'rec': reconstructed values
+        """
+
+        adata = self._validate_anndata(adata)
+        scdl = self._make_data_loader(
+            adata=adata, indices=None, batch_size=256
+        )
+
+        # get activities from decoder
+        activation = {}
+        def get_activation(index):
+            def hook(model, input, output):
+                activation[index] = output.to('cpu').detach()
+            return hook
+
+        hooks = {}
+
+        for i in range(len(self.module.decoder.L0.decoder)-1):
+            key = str(i)
+            value = self.module.decoder.L0.decoder[i][0].register_forward_hook(get_activation(i))
+            hooks[key] = value
+
+        latent = []
+        activities = []
+        for tensors in scdl:    
+            inference_outputs, generative_outputs = self.module.forward(
+                tensors=tensors,
+                compute_loss=False,
+                )
+
+            # get latent space embedding
+            z = inference_outputs["z"].to('cpu').detach().numpy()
+
+            # dec_mean_s = generative_outputs["gene_recon_s"]
+            # dec_mean_u = generative_outputs["gene_recon_u"]
+            
+            #Take mean over neurons
+            z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
+            act = torch.cat(list(activation.values()), dim=1).numpy()
+            act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+
+            latent.append(z)
+            activities.append(act)
+
+        latent = np.vstack(latent)
+        activities = np.vstack(activities)
+        
+        # remove hooks
+        for h in hooks:
+            hooks[h].remove()
+
+        # return pathway activities or reconstructed gene values
+        if output == 'act':
+            return np.hstack((latent,activities))
+
+        # if output == 'rec':
+        #     return reconstruction.to('cpu').detach().numpy()
+
+    def get_pathway_activities(self, ontobj=None, dataset=None, adata=None, **kwargs):
+        """
+        Parameters
+        -------------
+        ontobj: instance of the class Ontobj(), should be the same as the one used for model training
+        dataset: which dataset to use for pathway activity retrieval
+        **kwargs
+        terms: if we only want to get back the activities for certain terms (should be list of ids)
+        """
+        if adata is None:
+            adata = ontobj.data[str(self.top) + '_' + str(self.bottom)][dataset].copy()
+
+
+        # retireve pathway activities
+        act = self._pass_data_ontology(adata, 'act')
+
+        # if term was specified, subset
+        if 'terms' in kwargs:
+            terms = kwargs.get('terms')
+            annot = ontobj.annot[str(self.top) + '_' + str(self.bottom)]
+            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
+
+            act = act[:,term_ind]
+
+        return act
+
+    def ontology_directions(self, ontobj, dataset, method="sum", get_confidence=False,
+                          adata=None, key_added='directions_heirarchies'):
+        """Get directions of upregulation for each latent dimension and ontology layers.
+           Multipling this by raw scores ensures positive scores correspond to upregulation.
+           Parameters
+           ----------
+           method: String
+                Method of calculation, it should be 'sum' or 'counts'.
+           get_confidence: Boolean
+                Only for method='counts'. If 'True', also calculate confidence
+                of the directions.
+           adata: AnnData
+                An AnnData object to store dimensions. If 'None', self.adata is used.
+           key_added: String
+                key of adata.uns where to put the dimensions.
+        """
+        if adata is None:
+            adata = self.adata
+
+        terms_weights = self.get_pathway_activities(ontobj, dataset)
+
+
+        if method == "sum":
+            signs = terms_weights.sum(0)
+            signs[signs>0] = 1.
+            signs[signs<0] = -1.
+            confidence = None
+        elif method == "counts":
+            num_nz = torch.count_nonzero(terms_weights, dim=0)
+            upreg_genes = torch.count_nonzero(terms_weights > 0, dim=0)
+            signs = upreg_genes / (num_nz+(num_nz==0))
+            signs = signs.cpu().numpy()
+
+            confidence = signs.copy()
+            confidence = np.abs(confidence-0.5)/0.5
+            confidence[num_nz==0] = 0
+
+            signs[signs>0.5] = 1.
+            signs[signs<0.5] = -1.
+
+            signs[signs==0.5] = 0
+            signs[num_nz==0] = 0
+        else:
+            raise ValueError("Unrecognized method for getting the latent direction.")
+
+
+        ontobj.data[str(self.top) + '_' + str(self.bottom)][dataset].uns[key_added] = signs
+
         if get_confidence and confidence is not None:
             adata.uns[key_added + '_confindence'] = confidence
 
@@ -922,6 +1204,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             )
         else:
             return times
+
+    
 
     @torch.no_grad()
     def get_velocity(

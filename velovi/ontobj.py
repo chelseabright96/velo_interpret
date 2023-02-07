@@ -123,7 +123,7 @@ class Ontobj():
             Path to the obo file
         gene_annot
             gene_annot
-            Path two a tab-separated 2-column text file
+            Path to a tab-separated 2-column text file
             Gene1   Term1
             Gene1   Term2
             ...
@@ -357,6 +357,8 @@ class Ontobj():
         # store masks
         self.masks[str(top_thresh) + '_' + str(bottom_thresh)] = masks
 
+        
+
     def match_dataset(self, expr_data, name, top_thresh=1000, bottom_thresh=30):
 
             """
@@ -408,8 +410,17 @@ class Ontobj():
             
             
             if isinstance(expr, AnnData):
+                expr.var.index=expr.var.index.str.upper()
                 index_match=list(set(genes.index).intersection(set(expr.var.index)))
                 expr_match=expr[:,index_match]
+
+                #match final mask dimension to number of genes in dataset
+                genes_dataset = set(expr.var.index)
+                matching_genes_index = [i for i, val in enumerate(genes.index) if val in genes_dataset]
+                self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1]=self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1][matching_genes_index,:]
+
+                #duplicate output genes to have genes for reconstruction of both spliced and unspliced counts
+                self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1]=np.vstack((self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1],self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1]))
 
                 # expr_X=pd.Dataframe(expr.X.T, index=expr.var.index)
                 # expr_spliced=pd.Dataframe(expr.layers["spliced"].T, index=expr.var.index)

@@ -30,7 +30,7 @@ torch.backends.cudnn.benchmark = True
 class MaskedLinear(nn.Linear):
     def __init__(self, n_in,  n_out, mask, bias=True):
         # mask should have the same dimensions as the transposed linear weight
-        # n_input x n_output_nodes
+        # n_input x n_output_nodes (GPs x genes)
 
         #stack mask
         mask=torch.hstack((mask,mask))
@@ -121,29 +121,25 @@ class OntoDecoder(nn.Module):
   
     Parameters
     ---------------
-    in_features: # of features that are used as input
-    study_num: # of different studys that the samples belong to
+    n_output: # of genes to reconstruct
     layer_dims: list of tuples that define in and out for each layer
     mask_list: matrix for each layer transition, that determines which weights to zero out
-    latent_dim: latent dimension
-    drop: dropout rate, default is 0
+    drop_ont: dropout rate, default is 0
     """ 
 
-    def __init__(self, in_features, layer_dims, mask_list, latent_dim, neuronnum=1, drop=0):
+    def __init__(self, n_output, layer_dims, mask_list, neuronnum=1, drop_ont=0):
         super(OntoDecoder, self).__init__()
 
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.in_features = in_features
         self.layer_dims = np.hstack([layer_dims[:-1] * neuronnum, layer_dims[-1]])
         self.layer_shapes = [(np.sum(self.layer_dims[:i+1]), self.layer_dims[i+1]) for i in range(len(self.layer_dims)-1)]
         self.masks = []
         for m in mask_list[0:-1]:
             m = m.repeat_interleave(neuronnum, dim=0)
             m = m.repeat_interleave(neuronnum, dim=1)
-            self.masks.append(m.to(self.device))
-        self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(self.device))
-        self.latent_dim = latent_dim
-        self.drop = drop
+            self.masks.append(m.to(device))
+        self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(device))
+        self.drop_ont = drop_ont
 
         # Decoder
         self.decoder = nn.ModuleList(
@@ -152,7 +148,7 @@ class OntoDecoder(nn.Module):
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_shapes[-1][0], self.in_features)#,
+                    nn.Linear(self.layer_shapes[-1][0], 2*n_output)#,
                     #nn.Sigmoid()
                 )
             ]
@@ -163,13 +159,13 @@ class OntoDecoder(nn.Module):
             self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i])
 
         # make all weights in decoder positive - do not need this if we apply latent directions method to each hidden layer of decoder
-        #for i in range(len(self.decoder)):
+        # for i in range(len(self.decoder)):
         #    self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
 
     def build_block(self, ins, outs):
         return nn.Sequential(
             nn.Linear(ins, outs)#,
-            #nn.Dropout(p=self.drop),
+            #nn.Dropout(p=self.drop_ont),
             #nn.Sigmoid()
         )
 
@@ -225,8 +221,7 @@ class DecoderVELOVI(nn.Module):
     top_thresh: top threshold to tell which trimmed ontology to use
     bottom_thresh: bottom_threshold to tell which trimmed ontology to use
     neuronnum: number of neurons per term
-    drop: dropout rate, default is 0.2
-    z_drop: dropout rate for latent space, default is 0.5
+    drop_ont: dropout rate, default is 0.2
     """
 
     def __init__(
@@ -249,36 +244,27 @@ class DecoderVELOVI(nn.Module):
         dropout_rate: float = 0.0,
         linear_decoder: bool = False,
         use_ontology: bool = False,
-        ontobj=None, 
-        top_thresh=1000, 
-        bottom_thresh=30, 
-        neuronnum=3, 
-        drop=0.2, 
+        mask_list: list = [],
+        layer_dims_dec: np.ndarray = None,
+        neuronnum: int = 3,
+        drop_ont: float = 0.2,
         **kwargs,
     ):
         super().__init__()
         self.n_ouput = n_output
         self.linear_decoder = linear_decoder
         self.use_ontology = use_ontology
+        self.mask_list = mask_list
 
-        
-
-        ########### GP DECODER ############
         if self.use_ontology:
-            self.ontology = ontobj.description
-            self.top = top_thresh
-            self.bottom = bottom_thresh
-            self.genes = ontobj.genes[str(top_thresh) + '_' + str(bottom_thresh)]
-            self.in_features = len(self.genes)
-            self.mask_list = ontobj.masks[str(top_thresh) + '_' + str(bottom_thresh)]
-            self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
-            self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
-            self.latent_dim = self.layer_dims_dec[0] * neuronnum
-            self.layer_dims_enc = [self.latent_dim]
-            self.neuronnum = neuronnum
-            self.drop = drop
-            self.L0 = OntoDecoder(self.in_features, self.layer_dims_dec, self.mask_list, self.latent_dim, self.neuronnum, self.drop)
-        
+            last_layer = "identity"
+
+        if recon_loss == "mse":
+                if last_layer == "softmax":
+                    raise ValueError("Can't specify softmax last layer with mse loss.")
+                last_layer = "identity" if last_layer is None else last_layer
+        elif recon_loss == "nb":
+            last_layer = "softmax" if last_layer is None else last_layer
         else:
             if recon_loss == "mse":
                 if last_layer == "softmax":
@@ -289,12 +275,18 @@ class DecoderVELOVI(nn.Module):
             else:
                 raise ValueError("Unrecognized loss.")
 
-            # print("GP Decoder Architecture:")
-            # #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
-            # if mask is not None:
-            #     print('\twith hard mask.')
-            # else:
-            #     print('\twith soft mask.')
+        
+
+        ########### GP DECODER ############
+        if self.use_ontology:
+            
+            self.layer_dims_dec =  layer_dims_dec
+            self.neuronnum = neuronnum
+            self.drop_ont = drop_ont
+            self.L0 = OntoDecoder(self.n_ouput, self.layer_dims_dec, self.mask_list, self.neuronnum, self.drop_ont)
+        
+        else:
+            
 
             self.n_ext = n_ext
             self.n_ext_m = n_ext_m
@@ -306,18 +298,18 @@ class DecoderVELOVI(nn.Module):
             self.L0 = MaskedCondLayers(n_input, n_output, n_cond, bias=False, n_ext=n_ext, n_ext_m=n_ext_m,
                                     mask=mask, ext_mask=ext_mask)
 
-            if last_layer == "softmax":
-                self.mean_decoder = nn.Softmax(dim=-1)
-            elif last_layer == "softplus":
-                self.mean_decoder = nn.Softplus()
-            elif last_layer == "exp":
-                self.mean_decoder = torch.exp
-            elif last_layer == "relu":
-                self.mean_decoder = nn.ReLU()
-            elif last_layer == "identity":
-                self.mean_decoder = lambda a: a
-            else:
-                raise ValueError("Unrecognized last layer.")
+        if last_layer == "softmax":
+            self.mean_decoder = nn.Softmax(dim=-1)
+        elif last_layer == "softplus":
+            self.mean_decoder = nn.Softplus()
+        elif last_layer == "exp":
+            self.mean_decoder = torch.exp
+        elif last_layer == "relu":
+            self.mean_decoder = nn.ReLU()
+        elif last_layer == "identity":
+            self.mean_decoder = lambda a: a
+        else:
+            raise ValueError("Unrecognized last layer.")
 
             print("Last Decoder layer:", last_layer)
 
@@ -504,10 +496,14 @@ class VELOVAE(BaseModuleClass):
         ext_mask: Optional[torch.Tensor] = None,
         soft_ext_mask: bool = False,
         use_ontology: bool = False,
-        ontobj=None,
+        mask_list: list = [],
+        layer_dims_dec: np.ndarray = None,
+        neuronnum: int = 3,
+        drop_ont: float = 0.2,
     ):
         super().__init__()
         self.n_latent = n_latent
+        self.use_ontology = use_ontology
         self.log_variational = log_variational
         self.latent_distribution = latent_distribution
         self.use_observed_lib_size = use_observed_lib_size
@@ -686,7 +682,10 @@ class VELOVAE(BaseModuleClass):
             activation_fn=torch.nn.ReLU,
             linear_decoder=linear_decoder,
             use_ontology=use_ontology,
-            ontobj=ontobj,
+            mask_list=mask_list,
+            layer_dims_dec=layer_dims_dec,
+            neuronnum=neuronnum, 
+            drop_ont=drop_ont, 
             )
 
        
@@ -829,9 +828,6 @@ class VELOVAE(BaseModuleClass):
     ):
         spliced = tensors[REGISTRY_KEYS.X_KEY]
         unspliced = tensors[REGISTRY_KEYS.U_KEY]
-
-        #gene reconstruction loss
-        #ground_truth_counts = spliced + unspliced
         
 
         if cond_batch is not None:
@@ -842,11 +838,18 @@ class VELOVAE(BaseModuleClass):
 
         dec_mean_s = generative_outputs["gene_recon_s"]
         dec_mean_u = generative_outputs["gene_recon_u"]
-        negbin_s = NegativeBinomial(mu=dec_mean_s, theta=dispersion)
-        negbin_u = NegativeBinomial(mu=dec_mean_u, theta=dispersion)
+
+        if self.use_ontology:
+            gene_recon_loss_s = F.mse_loss(dec_mean_s, spliced, reduction="sum") 
+            gene_recon_loss_u = F.mse_loss(dec_mean_u, unspliced, reduction="sum") 
         
-        gene_recon_loss_s = -negbin_s.log_prob(spliced)
-        gene_recon_loss_u = -negbin_u.log_prob(unspliced)
+        else:
+
+            negbin_s = NegativeBinomial(mu=dec_mean_s, theta=dispersion)
+            negbin_u = NegativeBinomial(mu=dec_mean_u, theta=dispersion)
+        
+            gene_recon_loss_s = -negbin_s.log_prob(spliced)
+            gene_recon_loss_u = -negbin_u.log_prob(unspliced)
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]

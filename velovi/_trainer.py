@@ -130,10 +130,11 @@ class CustomTrainingPlan(TrainingPlan):
 
         self.watch_lr = None
 
-        self.use_prox_ops = self.check_prox_ops()
-        self.prox_ops = {}
+        if self.model.use_ontology==False:
+            self.use_prox_ops = self.check_prox_ops()
+            self.prox_ops = {}
 
-        self.corr_coeffs = self.init_anneal()
+            self.corr_coeffs = self.init_anneal()
 
 
     def check_prox_ops(self):
@@ -243,18 +244,16 @@ class CustomTrainingPlan(TrainingPlan):
         #     self.prox_ops['ext_soft_mask'](self.model.decoder.L0.ext_L_m.weight.data)
 
     def training_step(self, batch, batch_idx, optimizer_idx=0):
-        self.init_prox_ops()
+        if self.model.use_ontology==False:
+            self.init_prox_ops()
         """Training step for the model."""
         if "alpha_kl" in self.loss_kwargs:
             alpha_kl = self.alpha_kl
             self.loss_kwargs.update({"alpha_kl": alpha_kl})
             self.log("alpha_kl", alpha_kl, on_step=True, on_epoch=False)
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
-        #self.log("train_loss", scvi_loss.loss, on_epoch=True)
-        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
-        #self.compute_and_log_metrics(scvi_loss, self.train_metrics, "train")
-        #super().training_step(batch, batch_idx, optimizer_idx=0)
-        self.apply_prox_ops()
+        if self.model.use_ontology==False:
+            self.apply_prox_ops()
         return scvi_loss.loss
         
     def validation_step(self, batch, batch_idx):
@@ -263,7 +262,7 @@ class CustomTrainingPlan(TrainingPlan):
         # so when relevant, the actual loss value is rescaled to number
         # of training examples
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
-        n_deact_terms = self.model.decoder.n_inactive_terms()
+        #n_deact_terms = self.model.decoder.n_inactive_terms()
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
         #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
