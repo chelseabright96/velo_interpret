@@ -34,6 +34,7 @@ class MaskedLinear(nn.Linear):
 
         #stack mask
         mask=torch.hstack((mask,mask))
+        
 
         if n_in != mask.shape[0] or n_out != mask.shape[1]:
             raise ValueError('Incorrect shape of the mask.')
@@ -47,7 +48,7 @@ class MaskedLinear(nn.Linear):
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.mask=self.mask.to(device)
+        #self.mask=self.mask.to(device)
         self.weight.data=self.weight.data.to(device)
         self.weight.data*=self.mask.to(device)
 
@@ -362,6 +363,7 @@ class VELOVAE(BaseModuleClass):
     def __init__(
         self,
         n_input: int,
+        mask: torch.Tensor,
         true_time_switch: Optional[np.ndarray] = None,
         n_hidden: int = 128,
         n_latent: int = 10,
@@ -386,7 +388,6 @@ class VELOVAE(BaseModuleClass):
         linear_decoder: bool = False,
         time_dep_transcription_rate: bool = False,
         #Parameters for masked linear decoder
-        mask: torch.Tensor = None,
         recon_loss: str = 'nb',
         conditions: list = [],
         use_l_encoder: bool = False,
@@ -545,7 +546,7 @@ class VELOVAE(BaseModuleClass):
             soft_shape = mask.shape
             if soft_shape[0] != n_latent or soft_shape[1] != n_input:
                 raise ValueError('Incorrect shape of the soft mask.')
-            self.mask = mask.t()
+            self.mask = torch.hstack((mask,mask)).t()
             mask = None
         else:
             self.mask = None

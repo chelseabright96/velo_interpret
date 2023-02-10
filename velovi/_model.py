@@ -90,7 +90,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         dropout_rate: float = 0.1,
         gamma_init_data: bool = False,
         linear_decoder: bool = False,
-        mask: Optional[Union[np.ndarray, list]] = None,
+        mask: torch.Tensor = None,
         mask_key: str = 'I',
         soft_mask: bool = False,
         **model_kwargs,
@@ -102,6 +102,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         
         if mask is None:
             mask = adata.varm[mask_key].T
+        
 
         self.mask_ = mask if isinstance(mask, list) else mask.tolist()
         mask = torch.tensor(mask).float()
@@ -139,6 +140,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         self.module = VELOVAE(
             n_input=self.summary_stats["n_vars"],
+            mask=mask,
             n_hidden=n_hidden,
             n_latent=self.n_latent,
             n_layers=n_layers,
@@ -150,7 +152,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             switch_spliced=ms_upper,
             switch_unspliced=us_upper,
             linear_decoder=linear_decoder,
-            mask=mask,
             soft_mask=self.soft_mask_,
             **model_kwargs,
         )
@@ -183,6 +184,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         ] = "elbo_validation",
         gradient_clip_val: float = 10,
         alpha_GP=0.7,
+        alpha_l1=None,
         omega: Optional[torch.Tensor] = None,
         plan_kwargs: Optional[dict] = None,
         **trainer_kwargs,
@@ -227,7 +229,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         user_plan_kwargs = (
             plan_kwargs.copy() if isinstance(plan_kwargs, dict) else dict()
         )
-        plan_kwargs = dict(weight_decay=weight_decay, optimizer="AdamW")
+        plan_kwargs = dict(weight_decay=weight_decay, optimizer="AdamW", alpha_l1=alpha_l1)
         plan_kwargs.update(user_plan_kwargs)
 
         
