@@ -37,9 +37,9 @@ class ProxGroupLasso:
 
 
 class ProxL1:
-    def __init__(self, alpha_GP, I=None, inplace=True):
+    def __init__(self, alpha_l1, I=None, inplace=True):
         self._I = ~I.bool() if I is not None else None
-        self._alpha=alpha_GP
+        self._alpha=alpha_l1
         self._inplace=inplace
 
     def __call__(self, W):
@@ -143,7 +143,7 @@ class CustomTrainingPlan(TrainingPlan):
 
         use_prox_ops['main_group_lasso'] = use_main and self.alpha_GP is not None
 
-        use_mask = use_main and self.model.mask is not None
+        use_mask = use_main
         use_prox_ops['main_soft_mask'] = use_mask and self.alpha_l1 is not None
 
         # use_ext_m = self.model.n_ext_m_decoder > 0 and self.alpha_l1 is not None
@@ -181,9 +181,9 @@ class CustomTrainingPlan(TrainingPlan):
 
         if self.corr_coeffs['alpha_l1'] < 1.:
             any_change = True
-            time_to_anneal = self.epoch > 0 and self.epoch % self.self.alpha_l1_anneal_each == 0
+            time_to_anneal = self.current_epoch > 0 and self.current_epoch % self.alpha_l1_anneal_each == 0
             if time_to_anneal:
-                self.corr_coeffs['alpha_l1'] = min(self.epoch / self.alpha_l1_epoch_anneal, 1.)
+                self.corr_coeffs['alpha_l1'] = min(self.current_epoch / self.alpha_l1_epoch_anneal, 1.)
                 if self.print_stats:
                     print('New alpha_l1 anneal coefficient:', self.corr_coeffs['alpha_l1'])
 
@@ -244,6 +244,7 @@ class CustomTrainingPlan(TrainingPlan):
 
     def training_step(self, batch, batch_idx, optimizer_idx=0):
         self.init_prox_ops()
+
         """Training step for the model."""
         if "alpha_kl" in self.loss_kwargs:
             alpha_kl = self.alpha_kl
@@ -264,31 +265,33 @@ class CustomTrainingPlan(TrainingPlan):
         # of training examples
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
         n_deact_terms = self.model.decoder.n_inactive_terms()
-        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
+        self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
         #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
         self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
+        if self.use_prox_ops['main_group_lasso']:
+            n_deact_terms = self.model.decoder.n_inactive_terms()
+            msg = f'Number of deactivated terms: {n_deact_terms}'
+            msg = '\n' + msg
+            print(msg)
+            print('-------------------')
+        if self.use_prox_ops['main_soft_mask']:
+            main_mask = self.prox_ops['main_soft_mask']._I
+            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
+            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
+            print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
+            print('-------------------')
+            
+        any_change = self.anneal()
+        print(any_change)
+        if any_change:
+            self.update_prox_ops()
         
 
     # def validation_step(self, batch, batch_idx):
     #     #super().validation_step(batch, batch_idx)
     #     #if self.print_stats:
-    #     if self.use_prox_ops['main_group_lasso']:
-    #         n_deact_terms = self.model.decoder.n_inactive_terms()
-    #         msg = f'Number of deactivated terms: {n_deact_terms}'
-    #         msg = '\n' + msg
-    #         print(msg)
-    #         print('-------------------')
-    #     if self.use_prox_ops['main_soft_mask']:
-    #         main_mask = self.prox_ops['main_soft_mask']._I
-    #         share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-    #         share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-    #         print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-    #         print('-------------------')
-    #     any_change = self.anneal()
-    #     print(any_change)
-    #     if any_change:
-    #         self.update_prox_ops()
+   
     
     # def validation_epoch_end(self, batch, outs):
     #     # outs is a list of whatever you returned in `validation_step`
