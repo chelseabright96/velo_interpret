@@ -58,12 +58,14 @@ class ProxL1:
         W -= W_geq_alpha.float()*self._alpha
         W += W_leq_neg_alpha.float()*self._alpha
         W -= W_cond_joint.float()*W
+
         return W
 
 class CustomTrainingPlan(TrainingPlan):
     def __init__(self, 
             model,
             alpha_GP,
+            alpha_gene_recon,
             alpha_kl,
             lr=1e-2,
             weight_decay=1e-6,
@@ -85,9 +87,9 @@ class CustomTrainingPlan(TrainingPlan):
             gamma_epoch_anneal=None,
             gamma_anneal_each=5,
             beta=1.,
-            print_stats=True,
+            print_stats=False,
             **loss_kwargs,):
-        super().__init__(module=model,
+        super().__init__(model,
             lr=lr,
             weight_decay=weight_decay,
             n_steps_kl_warmup=n_steps_kl_warmup,
@@ -107,6 +109,7 @@ class CustomTrainingPlan(TrainingPlan):
         self.alpha_GP = alpha_GP
         self.omega = omega
         self.alpha_kl = alpha_kl
+        self.alpha_gene_recon=alpha_gene_recon
         
         #if torch.cuda.is_available():
         #    self.model.cuda()
@@ -202,7 +205,7 @@ class CustomTrainingPlan(TrainingPlan):
             print('Init the soft mask proximal operator for the main terms.')
             main_mask = self.model.mask.to(self.device)
             alpha_l1_corr = self.alpha_l1 * self.watch_lr * self.corr_coeffs['alpha_l1']
-            self.prox_ops['main_soft_mask'] = ProxL1(alpha_l1_corr, main_mask)
+            self.prox_ops['main_soft_mask'] = ProxL1(alpha_l1_corr, main_mask.t())
 
         # if 'ext_unannot_l1' not in self.prox_ops and self.use_prox_ops['ext_unannot_l1']:
         #     print('Init the L1 proximal operator for the unannotated extension.')
@@ -249,7 +252,9 @@ class CustomTrainingPlan(TrainingPlan):
         if "alpha_kl" in self.loss_kwargs:
             alpha_kl = self.alpha_kl
             self.loss_kwargs.update({"alpha_kl": alpha_kl})
-            self.log("alpha_kl", alpha_kl, on_step=True, on_epoch=False)
+        if "alpha_gene_recon" in self.loss_kwargs:
+            alpha_gene_recon = self.alpha_gene_recon
+            self.loss_kwargs.update({"alpha_gene_recon": alpha_gene_recon})
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
         #self.log("train_loss", scvi_loss.loss, on_epoch=True)
         #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
@@ -264,26 +269,26 @@ class CustomTrainingPlan(TrainingPlan):
         # so when relevant, the actual loss value is rescaled to number
         # of training examples
         _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
-        n_deact_terms = self.model.decoder.n_inactive_terms()
-        self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
+        #n_deact_terms = self.model.decoder.n_inactive_terms()
+        #self.log("no. deactivated terms", n_deact_terms, on_epoch=True)
         #self.log("validation_loss", scvi_loss.loss, on_epoch=True)
-        #elf.log_dict({'no. deactivated terms': n_deact_terms, 'validation_loss': scvi_loss.loss}, prog_bar=True)
+        self.log_dict({"kl_local":scvi_loss.kl_local.mean(), "kl_global":scvi_loss.kl_global, "mean_gene_recon_loss":scvi_loss.mean_gene_recon_loss, "mean_gene_recon_loss_s":scvi_loss.mean_gene_recon_loss_s, "mean_gene_recon_loss_u":scvi_loss.mean_gene_recon_loss_u, "mean_reconst_loss_vel":scvi_loss.mean_reconst_loss_vel, "mean_recon_loss_s":scvi_loss.mean_recon_loss_s, "mean_recon_loss_u":scvi_loss.mean_recon_loss_u, 'validation_loss': scvi_loss.loss}, prog_bar=True)
         self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
-        if self.use_prox_ops['main_group_lasso']:
-            n_deact_terms = self.model.decoder.n_inactive_terms()
-            msg = f'Number of deactivated terms: {n_deact_terms}'
-            msg = '\n' + msg
-            print(msg)
-            print('-------------------')
-        if self.use_prox_ops['main_soft_mask']:
-            main_mask = self.prox_ops['main_soft_mask']._I
-            share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
-            share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
-            print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
-            print('-------------------')
+        if self.print_stats:
+            if self.use_prox_ops['main_group_lasso']:
+                n_deact_terms = self.model.decoder.n_inactive_terms()
+                msg = f'Number of deactivated terms: {n_deact_terms}'
+                msg = '\n' + msg
+                print(msg)
+                print('-------------------')
+            if self.use_prox_ops['main_soft_mask']:
+                main_mask = self.prox_ops['main_soft_mask']._I
+                share_deact_genes = (self.model.decoder.L0.expr_L.weight.data.abs()==0) & main_mask
+                share_deact_genes = share_deact_genes.float().sum().cpu().numpy() / self.model.n_inact_genes
+                print('Share of deactivated inactive genes: %.4f' % share_deact_genes)
+                print('-------------------')
             
         any_change = self.anneal()
-        print(any_change)
         if any_change:
             self.update_prox_ops()
         

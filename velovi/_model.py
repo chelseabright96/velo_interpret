@@ -23,6 +23,7 @@ from scvi.train import TrainingPlan, TrainRunner
 from scvi.utils._docstrings import doc_differential_expression, setup_anndata_dsp
 from sklearn.metrics.pairwise import cosine_similarity
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from scvi.distributions import NegativeBinomial
 from ._trainer import CustomTrainingPlan
 
 from ._constants import REGISTRY_KEYS
@@ -97,6 +98,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
     ):
         super().__init__(adata)
 
+
         if mask is None and mask_key not in self.adata.varm:
             raise ValueError('Please provide mask.')
         
@@ -155,6 +157,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             soft_mask=self.soft_mask_,
             **model_kwargs,
         )
+
         self._model_summary_string = (
             "VELOVI Model with the following params: \nn_hidden: {}, n_latent: {}, n_layers: {}, dropout_rate: "
             "{}"
@@ -177,6 +180,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         train_size: float = 0.9,
         validation_size: Optional[float] = 0.1,
         batch_size: int = 256,
+        alpha_gene_recon: float = 1,
         alpha_kl: float = 0.1,
         early_stopping: bool = True,
         early_stopping_monitor: Literal[
@@ -232,7 +236,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         plan_kwargs = dict(weight_decay=weight_decay, optimizer="AdamW", alpha_l1=alpha_l1)
         plan_kwargs.update(user_plan_kwargs)
 
-        
         user_train_kwargs = trainer_kwargs.copy()
         trainer_kwargs = dict(gradient_clip_val=gradient_clip_val)
         trainer_kwargs.update(user_train_kwargs)
@@ -254,7 +257,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         )
 
 
-        training_plan = CustomTrainingPlan(self.module, alpha_GP=alpha_GP, omega=omega, alpha_kl=alpha_kl, **plan_kwargs)
+        training_plan = CustomTrainingPlan(model=self.module, alpha_GP=alpha_GP, omega=omega, alpha_gene_recon=alpha_gene_recon, alpha_kl=alpha_kl, **plan_kwargs)
         #training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
@@ -1374,7 +1377,165 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             return df_s, df_u
         else:
             return fits_s, fits_u
+        
+    @torch.no_grad()
+    def get_expression_fit2(
+        self,
+        adata: Optional[AnnData] = None,
+        indices: Optional[Sequence[int]] = None,
+        n_samples: int = 1,
+        batch_size: Optional[int] = None,
+        return_mean: bool = True,
+        return_numpy: Optional[bool] = None,
+        restrict_to_latent_dim: Optional[int] = None,
+    ) -> Union[np.ndarray, pd.DataFrame]:
 
+        adata = self._validate_anndata(adata)
+
+        scdl = self._make_data_loader(
+            adata=adata, indices=indices, batch_size=batch_size
+        )
+
+        if n_samples > 1 and return_mean is False:
+            if return_numpy is False:
+                warnings.warn(
+                    "return_numpy must be True if n_samples > 1 and return_mean is False, returning np.ndarray"
+                )
+            return_numpy = True
+        if indices is None:
+            indices = np.arange(adata.n_obs)
+
+        fits_s = []
+        fits_u = []
+        for tensors in scdl:
+            minibatch_samples_s = []
+            minibatch_samples_u = []
+            for _ in range(n_samples):
+                inference_outputs, generative_outputs = self.module.forward(
+                    tensors=tensors,
+                    compute_loss=False,
+                    generative_kwargs=dict(latent_dim=restrict_to_latent_dim),
+                )
+
+                dispersion = self.module.theta.cpu()  
+                dispersion = torch.exp(dispersion)
+
+                dec_mean_s = generative_outputs["gene_recon_s"]
+                dec_mean_u = generative_outputs["gene_recon_u"]
+                negbin_s = NegativeBinomial(mu=dec_mean_s, theta=dispersion)
+                negbin_u = NegativeBinomial(mu=dec_mean_u, theta=dispersion)
+                
+                fit_s = negbin_s.mean
+                fit_u = negbin_u.mean
+
+                fit_s = fit_s.cpu().numpy()
+                fit_u = fit_u.cpu().numpy()
+
+                minibatch_samples_s.append(fit_s)
+                minibatch_samples_u.append(fit_u)
+
+            # samples by cells by genes
+            fits_s.append(np.stack(minibatch_samples_s, axis=0))
+            if return_mean:
+                # mean over samples axis
+                fits_s[-1] = np.mean(fits_s[-1], axis=0)
+            # samples by cells by genes
+            fits_u.append(np.stack(minibatch_samples_u, axis=0))
+            if return_mean:
+                # mean over samples axis
+                fits_u[-1] = np.mean(fits_u[-1], axis=0)
+
+        if n_samples > 1:
+            # The -2 axis correspond to cells.
+            fits_s = np.concatenate(fits_s, axis=-2)
+            fits_u = np.concatenate(fits_u, axis=-2)
+        else:
+            fits_s = np.concatenate(fits_s, axis=0)
+            fits_u = np.concatenate(fits_u, axis=0)
+
+        if return_numpy is None or return_numpy is False:
+            df_s = pd.DataFrame(
+                fits_s,
+                columns=adata.var_names,
+                index=adata.obs_names[indices],
+            )
+            df_u = pd.DataFrame(
+                fits_u,
+                columns=adata.var_names,
+                index=adata.obs_names[indices],
+            )
+            return df_s, df_u
+        else:
+            return fits_s, fits_u
+
+    @torch.no_grad()
+    def get_gene_recon_loss(
+        self,
+        adata: Optional[AnnData] = None,
+        indices: Optional[Sequence[int]] = None,
+        gene_list: Optional[Sequence[str]] = None,
+        n_samples: int = 1,
+        batch_size: Optional[int] = None,
+        return_mean: bool = True,
+        return_numpy: Optional[bool] = None,
+    ) -> Union[np.ndarray, pd.DataFrame]:
+        r"""
+        Returns the likelihood per gene. Higher is better.
+
+        """
+
+        adata = self._validate_anndata(adata)
+        scdl = self._make_data_loader(
+            adata=adata, indices=indices, batch_size=batch_size
+        )
+
+        if gene_list is None:
+            gene_mask = slice(None)
+        else:
+            all_genes = adata.var_names
+            gene_mask = [True if gene in gene_list else False for gene in all_genes]
+
+        if n_samples > 1 and return_mean is False:
+            if return_numpy is False:
+                warnings.warn(
+                    "return_numpy must be True if n_samples > 1 and return_mean is False, returning np.ndarray"
+                )
+            return_numpy = True
+        if indices is None:
+            indices = np.arange(adata.n_obs)
+
+        rls = []
+        for tensors in scdl:
+            minibatch_samples = []
+            for _ in range(n_samples):
+                inference_outputs, generative_outputs = self.module.forward(
+                    tensors=tensors,
+                    compute_loss=False,
+                )
+                spliced = tensors[REGISTRY_KEYS.X_KEY]
+                unspliced = tensors[REGISTRY_KEYS.U_KEY]
+
+                
+                dispersion = self.module.theta.cpu()
+                dispersion = torch.exp(dispersion)
+
+                dec_mean_s = generative_outputs["gene_recon_s"].cpu() 
+                dec_mean_u = generative_outputs["gene_recon_u"].cpu()
+                negbin_s = NegativeBinomial(mu=dec_mean_s, theta=dispersion)
+                negbin_u = NegativeBinomial(mu=dec_mean_u, theta=dispersion)
+                
+                gene_recon_loss_s = -negbin_s.log_prob(spliced)
+                gene_recon_loss_u = -negbin_u.log_prob(unspliced)
+                output = gene_recon_loss_u.sum(dim=-1) + gene_recon_loss_s.sum(dim=-1)
+                output = output.numpy()
+                minibatch_samples.append(output)
+            rls.append(np.stack(minibatch_samples, axis=0))
+            if return_mean:
+                rls[-1] = np.mean(rls[-1], axis=0)
+
+        rls = np.concatenate(rls, axis=0)
+        return np.mean(rls)
+    
     @torch.no_grad()
     def get_gene_likelihood(
         self,

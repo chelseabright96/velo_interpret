@@ -1,0 +1,5 @@
+,,al1_0.1_recov_top20,al1_0.1_in_beta_top20,al1_0.1_recov_top30,al1_0.1_in_beta_top30,al1_0.06_recov_top20,al1_0.06_in_beta_top20,al1_0.06_recov_top30,al1_0.06_in_beta_top30,al1_0.03_recov_top20,al1_0.03_in_beta_top20,al1_0.03_recov_top30,al1_0.03_in_beta_top30
+spliced,del_5,0,0,0,0,3,4,3,4,0,4,0,5
+spliced,del_10,0,0,0,0,0,0,0,0,0,0,1,1
+unspliced,del_5,0,0,0,0,3,4,3,4,0,4,0,5
+unspliced,del_10,0,0,0,0,0,0,0,0,0,0,1,1

@@ -32,8 +32,9 @@ class MaskedLinear(nn.Linear):
         # mask should have the same dimensions as the transposed linear weight
         # n_input x n_output_nodes
 
-        #stack mask
-        mask=torch.hstack((mask,mask))
+        #stack mask if mask is the same for both unspliced and spliced counts
+        if mask.shape[1]==n_out/2:
+            mask=torch.hstack((mask,mask))
         
 
         if n_in != mask.shape[0] or n_out != mask.shape[1]:
@@ -73,7 +74,6 @@ class MaskedCondLayers(nn.Module):
         self.n_ext_m = n_ext_m
 
         n_genes=n_out*2
-    
         if mask is None:
             self.expr_L = nn.Linear(n_in, n_genes, bias=bias)
         else:
@@ -188,12 +188,12 @@ class DecoderVELOVI(nn.Module):
         else:
             raise ValueError("Unrecognized loss.")
 
-        # print("GP Decoder Architecture:")
-        # #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
-        # if mask is not None:
-        #     print('\twith hard mask.')
-        # else:
-        #     print('\twith soft mask.')
+        #print("GP Decoder Architecture:")
+        #print("\tMasked linear layer in, ext_m, ext, cond, out: ", in_dim, n_ext_m, n_ext, n_cond, out_dim)
+        if mask is not None:
+            print('\twith hard mask.')
+        else:
+            print('\twith soft mask.')
 
         self.n_ext = n_ext
         self.n_ext_m = n_ext_m
@@ -284,9 +284,9 @@ class DecoderVELOVI(nn.Module):
 
         z_in = z
         if latent_dim is not None:
-            mask = torch.zeros_like(z)
-            mask[..., latent_dim] = 1
-            z_in = z * mask
+            latent_mask = torch.zeros_like(z)
+            latent_mask[..., latent_dim] = 1
+            z_in = z * latent_mask
         # The decoder returns values for the parameters of the ZINB distribution
         rho_first = self.rho_first_decoder(z_in)
 
@@ -540,13 +540,16 @@ class VELOVAE(BaseModuleClass):
                 self.theta = torch.nn.Parameter(torch.randn(1, self.n_input))
         else:
             self.theta = None
-
+        
         if self.soft_mask:
             self.n_inact_genes = (1-mask).sum().item()
-            soft_shape = mask.shape
-            if soft_shape[0] != n_latent or soft_shape[1] != n_input:
-                raise ValueError('Incorrect shape of the soft mask.')
-            self.mask = torch.hstack((mask,mask)).t()
+            if mask.shape[1]==n_genes/2:
+                self.mask = torch.hstack((mask,mask))
+            else:
+                self.mask=mask
+            soft_shape = self.mask.shape
+            if soft_shape[0] != n_latent or soft_shape[1] != n_genes:
+                raise ValueError('Incorrect shape of the soft mask.')  
             mask = None
         else:
             self.mask = None
@@ -719,6 +722,7 @@ class VELOVAE(BaseModuleClass):
         inference_outputs,
         generative_outputs,
         cond_batch=None,
+        alpha_gene_recon=1,
         alpha_kl: float = 0.1,
         n_obs: float = 1.0,
     ):
@@ -726,7 +730,7 @@ class VELOVAE(BaseModuleClass):
         unspliced = tensors[REGISTRY_KEYS.U_KEY]
 
         #gene reconstruction loss
-        #ground_truth_counts = spliced + unspliced
+
         
 
         if cond_batch is not None:
@@ -742,6 +746,12 @@ class VELOVAE(BaseModuleClass):
         
         gene_recon_loss_s = -negbin_s.log_prob(spliced)
         gene_recon_loss_u = -negbin_u.log_prob(unspliced)
+        
+        mean_gene_recon_loss_s = torch.mean(gene_recon_loss_s.sum(dim=-1))
+        mean_gene_recon_loss_u = torch.mean(gene_recon_loss_u.sum(dim=-1))
+        
+        gene_recon_loss = gene_recon_loss_u.sum(dim=-1) + gene_recon_loss_s.sum(dim=-1)
+        mean_gene_recon_loss= torch.mean(gene_recon_loss)
 
         qz_m = inference_outputs["qz_m"]
         qz_v = inference_outputs["qz_v"]
@@ -757,8 +767,15 @@ class VELOVAE(BaseModuleClass):
 
         reconst_loss_s = -mixture_dist_s.log_prob(spliced)
         reconst_loss_u = -mixture_dist_u.log_prob(unspliced)
-        reconst_loss = reconst_loss_u.sum(dim=-1) + reconst_loss_s.sum(dim=-1) 
-        reconst_loss += gene_recon_loss_u.sum(dim=-1) + gene_recon_loss_s.sum(dim=-1)
+        
+        mean_recon_loss_s = torch.mean(reconst_loss_s.sum(dim=-1) )
+        mean_recon_loss_u = torch.mean(reconst_loss_u.sum(dim=-1) )
+        
+        reconst_loss_vel = reconst_loss_u.sum(dim=-1) + reconst_loss_s.sum(dim=-1) 
+        mean_reconst_loss_vel = torch.mean(reconst_loss_vel)
+        mean_gene_reconst_loss = torch.mean(gene_recon_loss)
+        
+        reconst_loss = reconst_loss_vel + alpha_gene_recon*gene_recon_loss
 
         kl_pi = kl(
             Dirichlet(px_pi_alpha),
@@ -770,8 +787,6 @@ class VELOVAE(BaseModuleClass):
         weighted_kl_local = alpha_kl * (kl_divergence_z) + kl_pi
 
         local_loss = torch.mean(reconst_loss + weighted_kl_local) 
-        #local_loss = torch.mean(reconst_loss + weighted_kl_local)
-        #print(f"local_loss: {local_loss}")
 
         # combine local and global
         global_loss = 0
@@ -781,9 +796,11 @@ class VELOVAE(BaseModuleClass):
             + (1 / n_obs) * alpha_kl * (global_loss)
         )
 
-        loss_recorder = LossRecorder(
-            loss, reconst_loss, kl_local, torch.tensor(global_loss)
-        )
+        # loss_recorder = LossRecorder(
+        #     loss, reconst_loss, kl_local, torch.tensor(global_loss)
+        # )
+        
+        loss_recorder = LossRecorder(loss, reconstruction_loss=reconst_loss, kl_local=kl_local, kl_global=torch.tensor(global_loss), mean_gene_recon_loss=mean_gene_recon_loss, mean_gene_recon_loss_s=mean_gene_recon_loss_s, mean_gene_recon_loss_u=mean_gene_recon_loss_u, mean_reconst_loss_vel=mean_reconst_loss_vel, mean_recon_loss_s=mean_recon_loss_s, mean_recon_loss_u=mean_recon_loss_u)
 
         return loss_recorder
 
